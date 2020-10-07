@@ -4,7 +4,7 @@
 
 [![PyPI version](https://badge.fury.io/py/performer-pytorch.svg)](https://badge.fury.io/py/performer-pytorch)
 
-An implementation of Performer, a linear attention-based transformer, in Pytorch.
+An implementation of <a href="https://arxiv.org/abs/2009.14794">Performer</a>, a linear attention-based transformer variant with a **F**ast **A**ttention **V**ia positive **O**rthogonal **R**andom features approach (FAVOR+).
 
 ## Install
 
@@ -33,7 +33,7 @@ x = torch.randint(0, 20000, (1, 2048))
 model(x) # (1, 2048, 20000)
 ```
 
-Performer model, if you are working with say images
+Plain Performer, if you are working with say images or other modalities
 
 ```python
 import torch
@@ -57,8 +57,8 @@ model(x) # (1, 2048, 512)
 3. ~~full language model~~
 4. masking
 5. make causal variant efficient memory-wise
-6. document fast linear attention class. give better name than 'fast'
-7. add enwik8 training
+6. add enwik8 training
+7. try to implement gating in https://openreview.net/forum?id=QtTKTdVrFBB, contingent on (5)
 
 ## Citations
 
