@@ -17,7 +17,7 @@ def default(val, d):
 # transcribed from jax to pytorch from
 # https://github.com/google-research/google-research/blob/master/performer/fast_self_attention/fast_self_attention.py
 
-def softmax_kernel(data, projection_matrix, *, is_query, normalize_data=True, eps=0.0001):
+def softmax_kernel(data, projection_matrix, *, is_query, normalize_data=True, eps=1e-4, device = None):
     if normalize_data:
         data_normalizer = 1.0 / (data.shape[-1] ** 0.25)
     else:
@@ -26,7 +26,7 @@ def softmax_kernel(data, projection_matrix, *, is_query, normalize_data=True, ep
     ratio = 1.0 / (projection_matrix.shape[0] ** 0.5)
 
     data_mod_shape = data.shape[:(len(data.shape) - 2)] + projection_matrix.shape
-    data_thick_random_matrix = torch.zeros(data_mod_shape) + projection_matrix
+    data_thick_random_matrix = torch.zeros(data_mod_shape, device = device) + projection_matrix
 
     data_dash = torch.einsum('...id,...jd->...ij', (data_normalizer * data), data_thick_random_matrix)
 
@@ -65,9 +65,9 @@ def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device =
     final_matrix = torch.cat(block_list)
 
     if scaling == 0:
-        multiplier = torch.randn((nb_rows, nb_columns)).norm(dim = 1)
+        multiplier = torch.randn((nb_rows, nb_columns), device = device).norm(dim = 1)
     elif scaling == 1:
-        multiplier = math.sqrt((float(nb_columns))) * torch.ones((nb_rows,))
+        multiplier = math.sqrt((float(nb_columns))) * torch.ones((nb_rows,), device = device)
     else:
         raise ValueError(f'Invalid scaling {scaling}')
 
@@ -108,8 +108,8 @@ class FastAttention(nn.Module):
         else:
             projection_matrix = self.projection_matrix
 
-        q = softmax_kernel(q, projection_matrix, is_query = True)
-        k = softmax_kernel(k, projection_matrix, is_query = False)
+        q = softmax_kernel(q, projection_matrix, is_query = True, device = device)
+        k = softmax_kernel(k, projection_matrix, is_query = False, device = device)
 
         out = linear_attention(q, k, v) if not self.causal else causal_linear_attention(q, k, v)
         return out
@@ -142,7 +142,7 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-class FastSelfAttention(nn.Module):
+class SelfAttention(nn.Module):
     def __init__(self, dim, causal = False, heads = 8, nb_features = 256, redraw_projection = True):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
@@ -164,27 +164,28 @@ class FastSelfAttention(nn.Module):
         return out
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4):
+    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256):
         super().__init__()
         layers = []
         for _ in range(depth):
             layers.extend([
-                Residual(PreNorm(dim, FastSelfAttention(dim, causal = causal, heads = heads))),
+                Residual(PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features))),
                 Residual(PreNorm(dim, FeedForward(dim, ff_mult)))
             ])
         self.net = nn.Sequential(*layers)
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         return self.net(x)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256):
         super().__init__()
+        self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.performer = Performer(dim, depth, heads, causal, ff_mult)
+        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features)
         self.to_logits = nn.Linear(dim, num_tokens)
 
-    def forward(self, x):
+    def forward(self, x, **kwargs):
         b, n, device = *x.shape, x.device
         x = self.token_emb(x)
         x += self.pos_emb(torch.arange(n, device = device))

@@ -1,1 +1,2 @@
-from performer_pytorch.performer_pytorch import PerformerLM, Performer, FastAttention, FastSelfAttention
+from performer_pytorch.performer_pytorch import PerformerLM, Performer, FastAttention, SelfAttention
+from performer_pytorch.autoregressive_wrapper import AutoregressiveWrapper
