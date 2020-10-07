@@ -1,3 +1,5 @@
+<img src="./favor+.png" width="500px"></img>
+
 ## Performer - Pytorch (wip)
 
 [![PyPI version](https://badge.fury.io/py/performer-pytorch.svg)](https://badge.fury.io/py/performer-pytorch)
