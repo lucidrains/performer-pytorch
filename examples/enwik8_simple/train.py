@@ -19,7 +19,7 @@ LEARNING_RATE = 1e-4
 VALIDATE_EVERY  = 100
 GENERATE_EVERY  = 500
 GENERATE_LENGTH = 512
-SEQ_LEN = 256
+SEQ_LEN = 1024
 
 # helpers
 
@@ -42,7 +42,8 @@ model = PerformerLM(
     depth = 6,
     max_seq_len = SEQ_LEN,
     heads = 8,
-    causal = True
+    causal = True,
+    nb_features = 64
 )
 
 model = AutoregressiveWrapper(model)

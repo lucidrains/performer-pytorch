@@ -3,6 +3,7 @@ import torch
 import torch.nn.functional as F
 from torch import nn
 from einops import rearrange
+from functools import partial
 
 # helpers
 
@@ -17,7 +18,7 @@ def default(val, d):
 # transcribed from jax to pytorch from
 # https://github.com/google-research/google-research/blob/master/performer/fast_self_attention/fast_self_attention.py
 
-def softmax_kernel(data, projection_matrix, *, is_query, normalize_data=True, eps=1e-4, device = None):
+def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, eps=1e-4, device = None):
     if normalize_data:
         data_normalizer = 1.0 / (data.shape[-1] ** 0.25)
     else:
@@ -45,21 +46,23 @@ def softmax_kernel(data, projection_matrix, *, is_query, normalize_data=True, ep
 
     return data_dash
 
+def orthogonal_matrix_chunk(cols, device = None):
+    unstructured_block = torch.randn((cols, cols), device = device)
+    q, _ = torch.qr(unstructured_block)
+    return q.t()
+
 def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device = None):
     nb_full_blocks = int(nb_rows / nb_columns)
 
     block_list = []
+
     for _ in range(nb_full_blocks):
-        unstructured_block = torch.randn((nb_columns, nb_columns), device = device)
-        q, _ = torch.qr(unstructured_block)
-        q = q.t()
+        q = orthogonal_matrix_chunk(nb_columns, device = device)
         block_list.append(q)
 
     remaining_rows = nb_rows - nb_full_blocks * nb_columns
     if remaining_rows > 0:
-        unstructured_block = torch.randn((nb_columns, nb_columns), device = device)
-        q, _ = torch.qr(unstructured_block)
-        q = q.t()
+        q = orthogonal_matrix_chunk(nb_columns, device = device)
         block_list.append(q[:remaining_rows])
 
     final_matrix = torch.cat(block_list)
@@ -96,22 +99,27 @@ class FastAttention(nn.Module):
         self.nb_features = nb_features
         self.ortho_scaling = ortho_scaling
         self.redraw_projection = redraw_projection
+
+        self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = nb_features, nb_columns = dim_heads, scaling = ortho_scaling)
+
         if not redraw_projection:
-            projection_matrix = gaussian_orthogonal_random_matrix(nb_features, dim_heads, scaling = ortho_scaling)
+            projection_matrix = self.create_projection()
             self.register_buffer('projection_matrix', projection_matrix)
 
     def forward(self, q, k, v):
         device = q.device
 
         if self.redraw_projection:
-            projection_matrix = gaussian_orthogonal_random_matrix(self.nb_features, self.dim_heads, scaling = self.ortho_scaling, device = device)
+            projection_matrix = self.create_projection(device = device)
         else:
             projection_matrix = self.projection_matrix
 
-        q = softmax_kernel(q, projection_matrix, is_query = True, device = device)
-        k = softmax_kernel(k, projection_matrix, is_query = False, device = device)
+        create_kernel = partial(softmax_kernel, projection_matrix = projection_matrix, device = device)
+        q = create_kernel(q, is_query = True)
+        k = create_kernel(k, is_query = False)
 
-        out = linear_attention(q, k, v) if not self.causal else causal_linear_attention(q, k, v)
+        attn_fn = linear_attention if not self.causal else causal_linear_attention
+        out = attn_fn(q, k, v)
         return out
 
 # classes
