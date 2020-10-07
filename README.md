@@ -26,7 +26,8 @@ model = PerformerLM(
     dim = 512,              # dimension
     depth = 6,              # layers
     heads = 8,              # heads
-    causal = False          # auto-regressive or not
+    causal = False,         # auto-regressive or not
+    nb_features = 256       # random features dimension, set to 256 as default in original repository
 )
 
 x = torch.randint(0, 20000, (1, 2048))
@@ -59,6 +60,7 @@ model(x) # (1, 2048, 512)
 5. make causal variant efficient memory-wise
 6. add enwik8 training
 7. try to implement gating in https://openreview.net/forum?id=QtTKTdVrFBB, contingent on (5)
+8. Email authors about how low nb_features can go. Running out of memory easily.
 
 ## Citations
 
