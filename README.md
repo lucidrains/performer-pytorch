@@ -18,6 +18,7 @@ model = Performer(
     dim = 512,
     depth = 1,
     heads = 8,
+    causal = True   # auto-regressive or not
 )
 
 x = torch.randn(1, 1024, 512)
@@ -26,11 +27,12 @@ model(x) # (1, 1024, 512)
 
 ### Todo
 
-1. causal variant
+1. ~~causal variant~~
 2. renormalizations
 3. full language model
 4. masking
-5. document fast linear attention class. give better name than 'fast'
+5. make causal variant efficient memory-wise
+6. document fast linear attention class. give better name than 'fast'
 
 ## Citations
 

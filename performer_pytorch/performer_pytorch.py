@@ -73,6 +73,47 @@ def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device =
 
     return torch.diag(multiplier) @ final_matrix
 
+# linear attention classes with softmax kernel
+
+def linear_attention(q, k, v):
+    context = torch.einsum('...nd,...ne->...de', k, v)
+    out = torch.einsum('...de,...nd->...ne', context, q)
+    return out
+
+def causal_linear_attention(q, k, v):
+    k_cumsum = k.cumsum(dim=-2)
+    context = torch.einsum('...nd,...ne->...nde', k, v)
+    context = context.cumsum(dim=-3)
+    context /= k_cumsum.unsqueeze(dim=-1)
+    out = torch.einsum('...nde,...nd->...ne', context, q)
+    return out
+
+class FastAttention(nn.Module):
+    def __init__(self, dim_heads, nb_features = 256, redraw_projection = True, ortho_scaling = 1, causal = False):
+        super().__init__()
+        self.causal = causal
+        self.dim_heads = dim_heads
+        self.nb_features = nb_features
+        self.ortho_scaling = ortho_scaling
+        self.redraw_projection = redraw_projection
+        if not redraw_projection:
+            projection_matrix = gaussian_orthogonal_random_matrix(nb_features, dim_heads, scaling = ortho_scaling)
+            self.register_buffer('projection_matrix', projection_matrix)
+
+    def forward(self, q, k, v):
+        device = q.device
+
+        if self.redraw_projection:
+            projection_matrix = gaussian_orthogonal_random_matrix(self.nb_features, self.dim_heads, scaling = self.ortho_scaling, device = device)
+        else:
+            projection_matrix = self.projection_matrix
+
+        q = softmax_kernel(q, projection_matrix, is_query = True)
+        k = softmax_kernel(k, projection_matrix, is_query = False)
+
+        out = linear_attention(q, k, v) if not self.causal else causal_linear_attention(q, k, v)
+        return out
+
 # classes
 
 class Residual(nn.Module):
@@ -101,38 +142,11 @@ class FeedForward(nn.Module):
     def forward(self, x):
         return self.net(x)
 
-class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = 256, redraw_projection = True, ortho_scaling = 1):
-        super().__init__()
-        self.dim_heads = dim_heads
-        self.nb_features = nb_features
-        self.ortho_scaling = ortho_scaling
-        self.redraw_projection = redraw_projection
-        if not redraw_projection:
-            projection_matrix = gaussian_orthogonal_random_matrix(nb_features, dim_heads, scaling = ortho_scaling)
-            self.register_buffer('projection_matrix', projection_matrix)
-
-    def forward(self, q, k, v):
-        device = q.device
-
-        if self.redraw_projection:
-            projection_matrix = gaussian_orthogonal_random_matrix(self.nb_features, self.dim_heads, scaling = self.ortho_scaling, device = device)
-        else:
-            projection_matrix = self.projection_matrix
-
-        q_kernel = softmax_kernel(q, projection_matrix, is_query = True)
-        k_kernel = softmax_kernel(k, projection_matrix, is_query = False)
-
-        context = torch.einsum('...nd,...ne->...de', k_kernel, v)
-        out = torch.einsum('...de,...nd->...ne', context, q_kernel)
-
-        return out
-
 class FastSelfAttention(nn.Module):
-    def __init__(self, dim, heads = 8, nb_features = 256, redraw_projection = True):
+    def __init__(self, dim, causal = False, heads = 8, nb_features = 256, redraw_projection = True):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
-        self.fast_attention = FastAttention(dim // heads, nb_features, redraw_projection)
+        self.fast_attention = FastAttention(dim // heads, nb_features, redraw_projection, causal = causal)
 
         self.heads = heads
         self.to_qkv = nn.Linear(dim, dim * 3, bias = False)
@@ -150,12 +164,12 @@ class FastSelfAttention(nn.Module):
         return out
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, ff_mult = 4):
+    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4):
         super().__init__()
         layers = []
         for _ in range(depth):
             layers.extend([
-                Residual(PreNorm(dim, FastSelfAttention(dim, heads = heads))),
+                Residual(PreNorm(dim, FastSelfAttention(dim, causal = causal, heads = heads))),
                 Residual(PreNorm(dim, FeedForward(dim, ff_mult)))
             ])
         self.net = nn.Sequential(*layers)
