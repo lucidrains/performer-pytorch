@@ -10,6 +10,27 @@ $ pip install performer-pytorch
 
 ## Usage
 
+Performer Language Model
+
+```python
+import torch
+from performer_pytorch import PerformerLM
+
+model = PerformerLM(
+    num_tokens = 20000,
+    max_seq_len = 2048,     # max sequence length
+    dim = 512,              # dimension
+    depth = 6,              # layers
+    heads = 8,              # heads
+    causal = False          # auto-regressive or not
+)
+
+x = torch.randint(0, 20000, (1, 2048))
+model(x) # (1, 2048, 20000)
+```
+
+Performer model, if you are working with say images
+
 ```python
 import torch
 from performer_pytorch import Performer
@@ -18,11 +39,11 @@ model = Performer(
     dim = 512,
     depth = 1,
     heads = 8,
-    causal = True   # auto-regressive or not
+    causal = True
 )
 
-x = torch.randn(1, 1024, 512)
-model(x) # (1, 1024, 512)
+x = torch.randn(1, 2048, 512)
+model(x) # (1, 2048, 512)
 ```
 
 ### Todo
@@ -33,6 +54,7 @@ model(x) # (1, 1024, 512)
 4. masking
 5. make causal variant efficient memory-wise
 6. document fast linear attention class. give better name than 'fast'
+7. add enwik8 training
 
 ## Citations
 

@@ -1,1 +1,1 @@
-from performer_pytorch.performer_pytorch import Performer, FastAttention, FastSelfAttention
+from performer_pytorch.performer_pytorch import PerformerLM, Performer, FastAttention, FastSelfAttention

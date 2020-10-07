@@ -175,3 +175,18 @@ class Performer(nn.Module):
         self.net = nn.Sequential(*layers)
     def forward(self, x):
         return self.net(x)
+
+class PerformerLM(nn.Module):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4):
+        super().__init__()
+        self.token_emb = nn.Embedding(num_tokens, dim)
+        self.pos_emb = nn.Embedding(max_seq_len, dim)
+        self.performer = Performer(dim, depth, heads, causal, ff_mult)
+        self.to_logits = nn.Linear(dim, num_tokens)
+
+    def forward(self, x):
+        b, n, device = *x.shape, x.device
+        x = self.token_emb(x)
+        x += self.pos_emb(torch.arange(n, device = device))
+        x = self.performer(x)
+        return self.to_logits(x)
