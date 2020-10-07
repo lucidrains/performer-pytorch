@@ -1,5 +1,7 @@
 ## Performer - Pytorch (wip)
 
+[![PyPI version](https://badge.fury.io/py/performer-pytorch.svg)](https://badge.fury.io/py/performer-pytorch)
+
 An implementation of Performer, a linear attention-based transformer, in Pytorch.
 
 ## Install
