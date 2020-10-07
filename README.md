@@ -52,7 +52,7 @@ model(x) # (1, 2048, 512)
 
 1. ~~causal variant~~
 2. renormalizations
-3. full language model
+3. ~~full language model~~
 4. masking
 5. make causal variant efficient memory-wise
 6. document fast linear attention class. give better name than 'fast'
