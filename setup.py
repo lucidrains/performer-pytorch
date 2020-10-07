@@ -2,8 +2,8 @@ from setuptools import setup, find_packages
 
 setup(
   name = 'performer-pytorch',
-  packages = find_packages(),
-  version = '0.0.4',
+  packages = find_packages(excludes=['examples']),
+  version = '0.0.5',
   license='MIT',
   description = 'Performer - Pytorch',
   author = 'Phil Wang',
