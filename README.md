@@ -58,9 +58,10 @@ model(x) # (1, 2048, 512)
 3. ~~full language model~~
 4. masking
 5. make causal variant efficient memory-wise
-6. add enwik8 training
+6. ~~add enwik8 training~~
 7. try to implement gating in https://openreview.net/forum?id=QtTKTdVrFBB, contingent on (5)
-8. Email authors about how low nb_features can go. Running out of memory easily.
+8. ~~Email authors about how low nb_features can go. Running out of memory easily.~~
+9. Benchmark against elu(x) + 1 kernel and measure impact of kernel choice
 
 ## Citations
 
