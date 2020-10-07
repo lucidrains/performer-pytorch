@@ -1,6 +1,36 @@
-## Performer - Pytorch
+## Performer - Pytorch (wip)
 
 An implementation of Performer, a linear attention-based transformer, in Pytorch.
+
+## Install
+
+```bash
+$ pip install performer-pytorch
+```
+
+## Usage
+
+```python
+import torch
+from performer_pytorch import Performer
+
+model = Performer(
+    dim = 512,
+    depth = 1,
+    heads = 8,
+)
+
+x = torch.randn(1, 1024, 512)
+model(x) # (1, 1024, 512)
+```
+
+### Todo
+
+1. causal variant
+2. renormalizations
+3. full language model
+4. masking
+5. document fast linear attention class. give better name than 'fast'
 
 ## Citations
 
