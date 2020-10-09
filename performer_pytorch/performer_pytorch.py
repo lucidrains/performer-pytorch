@@ -4,6 +4,7 @@ import torch.nn.functional as F
 from torch import nn
 from einops import rearrange
 from functools import partial
+from performer_pytorch.reversible import ReversibleSequence, SequentialSequence
 
 # helpers
 
@@ -124,13 +125,6 @@ class FastAttention(nn.Module):
 
 # classes
 
-class Residual(nn.Module):
-    def __init__(self, fn):
-        super().__init__()
-        self.fn = fn
-    def forward(self, x):
-        return self.fn(x) + x
-
 class PreNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
@@ -138,6 +132,19 @@ class PreNorm(nn.Module):
         self.fn = fn
     def forward(self, x):
         return self.fn(self.norm(x))
+
+class Chunk(nn.Module):
+    def __init__(self, chunks, fn, along_dim = -1):
+        super().__init__()
+        self.dim = along_dim
+        self.chunks = chunks
+        self.fn = fn
+
+    def forward(self, x, **kwargs):
+        if self.chunks == 1:
+            return self.fn(x, **kwargs)
+        chunks = x.chunk(self.chunks, dim = self.dim)
+        return torch.cat([self.fn(c, **kwargs) for c in chunks], dim = self.dim)
 
 class FeedForward(nn.Module):
     def __init__(self, dim, mult = 4):
@@ -172,25 +179,26 @@ class SelfAttention(nn.Module):
         return out
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256):
+    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256, reversible = False, ff_chunks = 1):
         super().__init__()
-        layers = []
+        layers = nn.ModuleList([])
         for _ in range(depth):
-            layers.extend([
-                Residual(PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features))),
-                Residual(PreNorm(dim, FeedForward(dim, ff_mult)))
-            ])
-        self.net = nn.Sequential(*layers)
+            layers.append(nn.ModuleList([
+                PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features)),
+                PreNorm(dim, Chunk(ff_chunks, FeedForward(dim, mult = ff_mult), along_dim = 1))
+            ]))
+        execute_type = ReversibleSequence if reversible else SequentialSequence
+        self.net = execute_type(layers)
     def forward(self, x, **kwargs):
         return self.net(x)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256, reversible = False, ff_chunks = 1):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features)
+        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks)
         self.to_logits = nn.Linear(dim, num_tokens)
 
     def forward(self, x, **kwargs):

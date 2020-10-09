@@ -27,7 +27,9 @@ model = PerformerLM(
     depth = 6,              # layers
     heads = 8,              # heads
     causal = False,         # auto-regressive or not
-    nb_features = 256       # random features dimension, set to 256 as default in original repository
+    nb_features = 256,      # random features dimension, set to 256 as default in original repository
+    reversible = True,      # reversible layers, from Reformer paper
+    ff_chunks = 10,         # chunk feedforward layer, from Reformer paper
 )
 
 x = torch.randint(0, 20000, (1, 2048))
@@ -73,5 +75,15 @@ model(x) # (1, 2048, 512)
     eprint={2009.14794},
     archivePrefix={arXiv},
     primaryClass={cs.LG}
+}
+```
+
+```bibtex
+@inproceedings{kitaev2020reformer,
+    title       = {Reformer: The Efficient Transformer},
+    author      = {Nikita Kitaev and Lukasz Kaiser and Anselm Levskaya},
+    booktitle   = {International Conference on Learning Representations},
+    year        = {2020},
+    url         = {https://openreview.net/forum?id=rkgNKkHtvB}
 }
 ```
