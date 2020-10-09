@@ -1,7 +1,7 @@
 import math
 import torch
 import torch.nn.functional as F
-from torch import nn
+from torch import nn, jit
 from einops import rearrange
 from functools import partial
 from performer_pytorch.reversible import ReversibleSequence, SequentialSequence
@@ -77,19 +77,60 @@ def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device =
 
     return torch.diag(multiplier) @ final_matrix
 
+# causal linear attention classes
+
+class CasualLinearAttentionCell(jit.ScriptModule):
+    def __init__(self, dim_k, dim_v):
+        super().__init__()
+        self.dim_k = dim_k
+        self.dim_v = dim_v
+
+    @jit.script_method
+    def forward(self, input, state):
+        # type: (Tensor, Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]
+        dk, dv = self.dim_k, self.dim_v
+        cum_k, cum_kv = state
+        q, k, v = input[:, :dk], input[:, dk:(dk + dk)], input[:, -dv:]
+        context = torch.einsum('bi,bj->bij', k, v)
+
+        cum_kv = cum_kv + context
+        cum_k = cum_k + k
+        normalized_context = cum_kv / cum_k.unsqueeze(-1)
+
+        out = torch.einsum('bij,bi->bj', normalized_context, q)
+        return out, (cum_k, cum_kv)
+
+class CausalLinearAttentionLayer(jit.ScriptModule):
+    def __init__(self, dim_k, dim_v):
+        super().__init__()
+        self.cell = CasualLinearAttentionCell(dim_k, dim_v)
+
+    @jit.script_method
+    def forward(self, inputs, state):
+        # type: (Tensor, Tuple[Tensor, Tensor]) -> Tuple[Tensor, Tuple[Tensor, Tensor]]
+        inputs = inputs.unbind(1)
+        outputs = torch.jit.annotate(List[Tensor], [])
+        for i in range(len(inputs)):
+            input = inputs[i]
+            output, state = self.cell(input, state)
+            outputs += [output[:, None, :]]
+        return torch.cat(outputs, dim=1), state
+
+def causal_linear_attention(q, k, v):
+    heads, dk, dv, device = q.shape[1], k.shape[-1], v.shape[-1], q.device
+    layer = CausalLinearAttentionLayer(dk, dv)
+    i = torch.cat((q, k, v), dim = -1)
+    i = rearrange(i, 'b h n d -> (b h) n d')
+    state = (torch.zeros((1, dk), device = device), torch.zeros((1, dk, dv), device = device))
+    out, state = layer(i, state)
+    out = rearrange(out, '(b h) n d -> b h n d', h = heads)
+    return out
+
 # linear attention classes with softmax kernel
 
 def linear_attention(q, k, v):
     context = torch.einsum('...nd,...ne->...de', k, v)
     out = torch.einsum('...de,...nd->...ne', context, q)
-    return out
-
-def causal_linear_attention(q, k, v):
-    k_cumsum = k.cumsum(dim=-2)
-    context = torch.einsum('...nd,...ne->...nde', k, v)
-    context = context.cumsum(dim=-3)
-    context /= k_cumsum.unsqueeze(dim=-1)
-    out = torch.einsum('...nde,...nd->...ne', context, q)
     return out
 
 class FastAttention(nn.Module):
