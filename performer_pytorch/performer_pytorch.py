@@ -49,7 +49,7 @@ def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, ep
 
 def orthogonal_matrix_chunk(cols, device = None):
     unstructured_block = torch.randn((cols, cols), device = device)
-    q, _ = torch.qr(unstructured_block)
+    q, _ = torch.qr(unstructured_block, some = True)
     return q.t()
 
 def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device = None):
