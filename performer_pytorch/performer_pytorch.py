@@ -47,6 +47,23 @@ def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, ep
 
     return data_dash
 
+def generalized_kernel(data, *, projection_matrix, kernel_fn = nn.ReLU(), kernel_epsilon = 0.001, normalize_data = True, device = None):
+    if normalize_data:
+        data_normalizer = 1.0 / (data.shape[-1] ** 0.25)
+    else:
+        data_normalizer = 1.0
+
+    if projection_matrix is None:
+        return kernel_fn(data_normalizer * data) + kernel_epsilon
+
+    data_mod_shape = data.shape[0:len(data.shape) - 2] + projection_matrix.shape
+    data_thick_random_matrix = torch.zeros(data_mod_shape, device = device) + projection_matrix
+
+    data_dash = torch.einsum('...id,...jd->...ij', (data_normalizer * data), data_thick_random_matrix)
+
+    data_prime = kernel_fn(data_dash) + kernel_epsilon
+    return data_prime
+
 def orthogonal_matrix_chunk(cols, device = None):
     unstructured_block = torch.randn((cols, cols), device = device)
     q, _ = torch.qr(unstructured_block, some = True)
@@ -93,7 +110,7 @@ def causal_linear_attention(q, k, v):
     return out
 
 class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = 256, redraw_projection = True, ortho_scaling = 1, causal = False):
+    def __init__(self, dim_heads, nb_features = 256, redraw_projection = True, ortho_scaling = 1, causal = False, generalized_attention = False, kernel_fn = nn.ReLU()):
         super().__init__()
         self.causal = causal
         self.dim_heads = dim_heads
@@ -102,6 +119,9 @@ class FastAttention(nn.Module):
         self.redraw_projection = redraw_projection
 
         self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = nb_features, nb_columns = dim_heads, scaling = ortho_scaling)
+
+        self.generalized_attention = generalized_attention
+        self.kernel_fn = kernel_fn
 
         if not redraw_projection:
             projection_matrix = self.create_projection()
@@ -115,9 +135,13 @@ class FastAttention(nn.Module):
         else:
             projection_matrix = self.projection_matrix
 
-        create_kernel = partial(softmax_kernel, projection_matrix = projection_matrix, device = device)
-        q = create_kernel(q, is_query = True)
-        k = create_kernel(k, is_query = False)
+        if self.generalized_attention:
+            create_kernel = partial(generalized_kernel, kernel_fn = self.kernel_fn, projection_matrix = projection_matrix, device = device)
+            q, k = map(create_kernel, (q, k))
+        else:
+            create_kernel = partial(softmax_kernel, projection_matrix = projection_matrix, device = device)
+            q = create_kernel(q, is_query = True)
+            k = create_kernel(k, is_query = False)
 
         attn_fn = linear_attention if not self.causal else causal_linear_attention
         out = attn_fn(q, k, v)
@@ -158,10 +182,10 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, causal = False, heads = 8, nb_features = 256, redraw_projection = True):
+    def __init__(self, dim, causal = False, heads = 8, nb_features = 256, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU()):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
-        self.fast_attention = FastAttention(dim // heads, nb_features, redraw_projection, causal = causal)
+        self.fast_attention = FastAttention(dim // heads, nb_features, redraw_projection, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn)
 
         self.heads = heads
         self.to_qkv = nn.Linear(dim, dim * 3, bias = False)
@@ -179,12 +203,12 @@ class SelfAttention(nn.Module):
         return out
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256, reversible = False, ff_chunks = 1):
+    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU()):
         super().__init__()
         layers = nn.ModuleList([])
         for _ in range(depth):
             layers.append(nn.ModuleList([
-                PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features)),
+                PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features, redraw_projection = not reversible, generalized_attention = generalized_attention, kernel_fn = kernel_fn)),
                 PreNorm(dim, Chunk(ff_chunks, FeedForward(dim, mult = ff_mult), along_dim = 1))
             ]))
         execute_type = ReversibleSequence if reversible else SequentialSequence
@@ -193,12 +217,12 @@ class Performer(nn.Module):
         return self.net(x)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256, reversible = False, ff_chunks = 1):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU()):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks)
+        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn)
         self.to_logits = nn.Linear(dim, num_tokens)
 
     def forward(self, x, **kwargs):

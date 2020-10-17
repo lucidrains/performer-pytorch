@@ -22,14 +22,16 @@ from performer_pytorch import PerformerLM
 
 model = PerformerLM(
     num_tokens = 20000,
-    max_seq_len = 2048,     # max sequence length
-    dim = 512,              # dimension
-    depth = 6,              # layers
-    heads = 8,              # heads
-    causal = False,         # auto-regressive or not
-    nb_features = 256,      # random features dimension, set to 256 as default in original repository
-    reversible = True,      # reversible layers, from Reformer paper
-    ff_chunks = 10,         # chunk feedforward layer, from Reformer paper
+    max_seq_len = 2048,             # max sequence length
+    dim = 512,                      # dimension
+    depth = 6,                      # layers
+    heads = 8,                      # heads
+    causal = False,                 # auto-regressive or not
+    nb_features = 256,              # random features dimension, set to 256 as default in original repository
+    generalized_attention = False,  # defaults to softmax approximation, but can be set to True for generalized attention
+    kernel_fn = nn.ReLU(),          # the kernel function to be used, if generalized attention is turned on, defaults to Relu
+    reversible = True,              # reversible layers, from Reformer paper
+    ff_chunks = 10,                 # chunk feedforward layer, from Reformer paper
 )
 
 x = torch.randint(0, 20000, (1, 2048))
