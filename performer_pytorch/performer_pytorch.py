@@ -66,7 +66,8 @@ def generalized_kernel(data, *, projection_matrix, kernel_fn = nn.ReLU(), kernel
 
 def orthogonal_matrix_chunk(cols, device = None):
     unstructured_block = torch.randn((cols, cols), device = device)
-    q, _ = torch.qr(unstructured_block, some = True)
+    q, _ = torch.qr(unstructured_block.cpu(), some = True)
+    q = q.to(device)
     return q.t()
 
 def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device = None):
@@ -208,7 +209,7 @@ class Performer(nn.Module):
         layers = nn.ModuleList([])
         for _ in range(depth):
             layers.append(nn.ModuleList([
-                PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features, redraw_projection = not reversible, generalized_attention = generalized_attention, kernel_fn = kernel_fn)),
+                PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn)),
                 PreNorm(dim, Chunk(ff_chunks, FeedForward(dim, mult = ff_mult), along_dim = 1))
             ]))
         execute_type = ReversibleSequence if reversible else SequentialSequence
