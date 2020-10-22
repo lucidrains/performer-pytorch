@@ -57,10 +57,6 @@ x = torch.randn(1, 2048, 512)
 model(x) # (1, 2048, 512)
 ```
 
-### Todo
-
-- [ ] masking
-
 ## Citations
 
 ```bibtex
