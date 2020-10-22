@@ -18,8 +18,8 @@ GRADIENT_ACCUMULATE_EVERY = 4
 LEARNING_RATE = 1e-4
 VALIDATE_EVERY  = 100
 GENERATE_EVERY  = 500
-GENERATE_LENGTH = 512
-SEQ_LEN = 1024
+GENERATE_LENGTH = 2048
+SEQ_LEN = 4096
 
 # helpers
 
@@ -43,7 +43,8 @@ model = PerformerLM(
     max_seq_len = SEQ_LEN,
     heads = 8,
     causal = True,
-    nb_features = 64
+    reversible = True,
+    nb_features = 256
 )
 
 model = AutoregressiveWrapper(model)

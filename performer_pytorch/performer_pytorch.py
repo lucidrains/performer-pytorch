@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from torch import nn
 from einops import rearrange
 from functools import partial
+
+from fast_transformers.causal_product import CausalDotProduct
 from performer_pytorch.reversible import ReversibleSequence, SequentialSequence
 
 # helpers
@@ -97,12 +99,19 @@ def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device =
 
 # linear attention classes with softmax kernel
 
+# non-causal linear attention
 def linear_attention(q, k, v):
     context = torch.einsum('...nd,...ne->...de', k, v)
     out = torch.einsum('...de,...nd->...ne', context, q)
     return out
 
+# efficient causal linear attention, created by EPFL
 def causal_linear_attention(q, k, v):
+    return CausalDotProduct.apply(q, k, v)
+
+# inefficient causal linear attention, without cuda code, for reader's reference
+# not being used
+def causal_linear_attention_noncuda(q, k, v):
     k_cumsum = k.cumsum(dim=-2)
     context = torch.einsum('...nd,...ne->...nde', k, v)
     context = context.cumsum(dim=-3)
