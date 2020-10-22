@@ -164,8 +164,8 @@ class PreNorm(nn.Module):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
         self.fn = fn
-    def forward(self, x):
-        return self.fn(self.norm(x))
+    def forward(self, x, **kwargs):
+        return self.fn(self.norm(x), **kwargs)
 
 class Chunk(nn.Module):
     def __init__(self, chunks, fn, along_dim = -1):
@@ -201,10 +201,15 @@ class SelfAttention(nn.Module):
         self.to_qkv = nn.Linear(dim, dim * 3, bias = False)
         self.to_out = nn.Linear(dim, dim)
 
-    def forward(self, x):
+    def forward(self, x, mask = None):
         b, n, _, h = *x.shape, self.heads
-        qkv = self.to_qkv(x)
-        q, k, v = rearrange(qkv, 'b n (qkv h d) -> qkv b h n d', qkv = 3, h = h)
+        qkv = self.to_qkv(x).chunk(3, dim = -1)
+
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), qkv)
+
+        if exists(mask):
+            mask = mask[:, None, :, None]
+            k.masked_fill_(~mask, 0)
 
         out = self.fast_attention(q, k, v)
 
@@ -221,10 +226,14 @@ class Performer(nn.Module):
                 PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn)),
                 PreNorm(dim, Chunk(ff_chunks, FeedForward(dim, mult = ff_mult), along_dim = 1))
             ]))
+
         execute_type = ReversibleSequence if reversible else SequentialSequence
-        self.net = execute_type(layers)
+        route_attn = ((True, False),) * depth
+        attn_route_map = {'mask': route_attn}
+        self.net = execute_type(layers, args_route = {**attn_route_map})
+
     def forward(self, x, **kwargs):
-        return self.net(x)
+        return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
     def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU()):
@@ -239,5 +248,5 @@ class PerformerLM(nn.Module):
         b, n, device = *x.shape, x.device
         x = self.token_emb(x)
         x += self.pos_emb(torch.arange(n, device = device))
-        x = self.performer(x)
+        x = self.performer(x, **kwargs)
         return self.to_logits(x)

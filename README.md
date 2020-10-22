@@ -1,6 +1,6 @@
 <img src="./favor+.png" width="500px"></img>
 
-## Performer - Pytorch (wip)
+## Performer - Pytorch
 
 [![PyPI version](https://badge.fury.io/py/performer-pytorch.svg)](https://badge.fury.io/py/performer-pytorch)
 
@@ -35,7 +35,9 @@ model = PerformerLM(
 )
 
 x = torch.randint(0, 20000, (1, 2048))
-model(x) # (1, 2048, 20000)
+mask = torch.ones_like(x).bool()
+
+model(x, mask = mask) # (1, 2048, 20000)
 ```
 
 Plain Performer, if you are working with say images or other modalities
