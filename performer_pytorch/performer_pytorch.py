@@ -120,15 +120,17 @@ def causal_linear_attention_noncuda(q, k, v):
     return out
 
 class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = 256, redraw_projection = True, ortho_scaling = 1, causal = False, generalized_attention = False, kernel_fn = nn.ReLU()):
+    def __init__(self, dim_heads, nb_features = None, redraw_projection = True, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU()):
         super().__init__()
+        nb_features = default(nb_features, int(dim_heads * math.log(dim_heads)))
+
         self.causal = causal
         self.dim_heads = dim_heads
         self.nb_features = nb_features
         self.ortho_scaling = ortho_scaling
         self.redraw_projection = redraw_projection
 
-        self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = nb_features, nb_columns = dim_heads, scaling = ortho_scaling)
+        self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = self.nb_features, nb_columns = dim_heads, scaling = ortho_scaling)
 
         self.generalized_attention = generalized_attention
         self.kernel_fn = kernel_fn
@@ -192,7 +194,7 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, causal = False, heads = 8, nb_features = 256, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU()):
+    def __init__(self, dim, causal = False, heads = 8, nb_features = None, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU()):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
         self.fast_attention = FastAttention(dim // heads, nb_features, redraw_projection, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn)
@@ -218,7 +220,7 @@ class SelfAttention(nn.Module):
         return out
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU()):
+    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU()):
         super().__init__()
         layers = nn.ModuleList([])
         for _ in range(depth):
@@ -236,7 +238,7 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = 256, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU()):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU()):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(num_tokens, dim)
