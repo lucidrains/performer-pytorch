@@ -5,8 +5,11 @@ from torch import nn
 from einops import rearrange
 from functools import partial
 
-from fast_transformers.causal_product import CausalDotProduct
 from performer_pytorch.reversible import ReversibleSequence, SequentialSequence
+
+# need to use EPFL's causal product cuda code for autoregressive case
+
+from fast_transformers.causal_product import CausalDotProduct
 
 # helpers
 
@@ -124,7 +127,6 @@ class FastAttention(nn.Module):
         super().__init__()
         nb_features = default(nb_features, int(dim_heads * math.log(dim_heads)))
 
-        self.causal = causal
         self.dim_heads = dim_heads
         self.nb_features = nb_features
         self.ortho_scaling = ortho_scaling
@@ -138,6 +140,15 @@ class FastAttention(nn.Module):
         if not redraw_projection:
             projection_matrix = self.create_projection()
             self.register_buffer('projection_matrix', projection_matrix)
+
+        self.causal = causal
+        if causal:
+            try:
+                import fast_transformers.causal_product.causal_product_cuda
+                self.causal_linear_fn = causal_linear_attention_noncuda
+            except ImportError:
+                print('unable to import cuda code for auto-regressive Performer. will default to the memory inefficient non-cuda version')
+                self.causal_linear_fn = causal_linear_attention
 
     def forward(self, q, k, v):
         device = q.device
@@ -155,7 +166,7 @@ class FastAttention(nn.Module):
             q = create_kernel(q, is_query = True)
             k = create_kernel(k, is_query = False)
 
-        attn_fn = linear_attention if not self.causal else causal_linear_attention
+        attn_fn = linear_attention if not self.causal else self.causal_linear_fn
         out = attn_fn(q, k, v)
         return out
 
