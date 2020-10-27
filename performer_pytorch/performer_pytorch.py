@@ -104,8 +104,9 @@ def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device =
 
 # non-causal linear attention
 def linear_attention(q, k, v):
+    D_inv = torch.einsum('...nd,...d->...n', q, k.sum(dim = -2))
     context = torch.einsum('...nd,...ne->...de', k, v)
-    out = torch.einsum('...de,...nd->...ne', context, q)
+    out = torch.einsum('...de,...nd,...n->...ne', context, q, D_inv)
     return out
 
 # efficient causal linear attention, created by EPFL
