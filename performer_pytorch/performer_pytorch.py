@@ -69,24 +69,30 @@ def generalized_kernel(data, *, projection_matrix, kernel_fn = nn.ReLU(), kernel
     data_prime = kernel_fn(data_dash) + kernel_epsilon
     return data_prime
 
-def orthogonal_matrix_chunk(cols, device = None):
+def orthogonal_matrix_chunk(cols, qr_uniform_q = False, device = None):
     unstructured_block = torch.randn((cols, cols), device = device)
-    q, _ = torch.qr(unstructured_block.cpu(), some = True)
-    q = q.to(device)
+    q, r = torch.qr(unstructured_block.cpu(), some = True)
+    q, r = map(lambda t: t.to(device), (q, r))
+
+    # proposed by @Parskatt
+    # to make sure Q is uniform https://arxiv.org/pdf/math-ph/0609050.pdf
+    if qr_uniform_q:
+        d = torch.diag(r, 0)
+        q *= d.sign()
     return q.t()
 
-def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device = None):
+def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, qr_uniform_q = False, device = None):
     nb_full_blocks = int(nb_rows / nb_columns)
 
     block_list = []
 
     for _ in range(nb_full_blocks):
-        q = orthogonal_matrix_chunk(nb_columns, device = device)
+        q = orthogonal_matrix_chunk(nb_columns, qr_uniform_q = qr_uniform_q, device = device)
         block_list.append(q)
 
     remaining_rows = nb_rows - nb_full_blocks * nb_columns
     if remaining_rows > 0:
-        q = orthogonal_matrix_chunk(nb_columns, device = device)
+        q = orthogonal_matrix_chunk(nb_columns, qr_uniform_q = qr_uniform_q, device = device)
         block_list.append(q[:remaining_rows])
 
     final_matrix = torch.cat(block_list)
@@ -124,7 +130,7 @@ def causal_linear_attention_noncuda(q, k, v):
     return out
 
 class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = None, redraw_projection = True, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU()):
+    def __init__(self, dim_heads, nb_features = None, redraw_projection = True, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False):
         super().__init__()
         nb_features = default(nb_features, int(dim_heads * math.log(dim_heads)))
 
@@ -133,7 +139,7 @@ class FastAttention(nn.Module):
         self.ortho_scaling = ortho_scaling
         self.redraw_projection = redraw_projection
 
-        self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = self.nb_features, nb_columns = dim_heads, scaling = ortho_scaling)
+        self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = self.nb_features, nb_columns = dim_heads, scaling = ortho_scaling, qr_uniform_q = qr_uniform_q)
 
         self.generalized_attention = generalized_attention
         self.kernel_fn = kernel_fn
@@ -206,10 +212,10 @@ class FeedForward(nn.Module):
         return self.net(x)
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, causal = False, heads = 8, nb_features = None, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU()):
+    def __init__(self, dim, causal = False, heads = 8, nb_features = None, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
-        self.fast_attention = FastAttention(dim // heads, nb_features, redraw_projection, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn)
+        self.fast_attention = FastAttention(dim // heads, nb_features, redraw_projection, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q)
 
         self.heads = heads
         self.to_qkv = nn.Linear(dim, dim * 3, bias = False)
@@ -232,12 +238,12 @@ class SelfAttention(nn.Module):
         return out
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU()):
+    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False):
         super().__init__()
         layers = nn.ModuleList([])
         for _ in range(depth):
             layers.append(nn.ModuleList([
-                PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn)),
+                PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q)),
                 PreNorm(dim, Chunk(ff_chunks, FeedForward(dim, mult = ff_mult), along_dim = 1))
             ]))
 
@@ -250,12 +256,12 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU()):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn)
+        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q)
         self.to_logits = nn.Linear(dim, num_tokens)
 
     def forward(self, x, **kwargs):
