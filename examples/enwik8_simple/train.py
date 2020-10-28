@@ -44,7 +44,8 @@ model = PerformerLM(
     heads = 8,
     causal = True,
     reversible = True,
-    nb_features = 256
+    nb_features = 256,
+    use_scalenorm = True
 )
 
 model = AutoregressiveWrapper(model)

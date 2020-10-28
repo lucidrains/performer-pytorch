@@ -179,7 +179,28 @@ class FastAttention(nn.Module):
 
 # classes
 
-class PreNorm(nn.Module):
+class ReZero(nn.Module):
+    def __init__(self, fn):
+        super().__init__()
+        self.g = nn.Parameter(torch.zeros(1))
+        self.fn = fn
+
+    def forward(self, x, **kwargs):
+        return self.fn(x, **kwargs) * self.g
+
+class PreScaleNorm(nn.Module):
+    def __init__(self, dim, fn, eps=1e-5):
+        super().__init__()
+        self.fn = fn
+        self.g = nn.Parameter(torch.ones(1))
+        self.eps = eps
+
+    def forward(self, x, **kwargs):
+        n = torch.norm(x, dim=-1, keepdim=True).clamp(min=self.eps)
+        x = x / n * self.g
+        return self.fn(x, **kwargs)
+
+class PreLayerNorm(nn.Module):
     def __init__(self, dim, fn):
         super().__init__()
         self.norm = nn.LayerNorm(dim)
@@ -238,13 +259,21 @@ class SelfAttention(nn.Module):
         return out
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False):
+    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False):
         super().__init__()
         layers = nn.ModuleList([])
+
+        if use_scalenorm:
+            wrapper_fn = partial(PreScaleNorm, dim)
+        elif use_rezero:
+            wrapper_fn = ReZero
+        else:
+            wrapper_fn = partial(PreLayerNorm, dim)
+
         for _ in range(depth):
             layers.append(nn.ModuleList([
-                PreNorm(dim, SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q)),
-                PreNorm(dim, Chunk(ff_chunks, FeedForward(dim, mult = ff_mult), along_dim = 1))
+                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q)),
+                wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult), along_dim = 1))
             ]))
 
         execute_type = ReversibleSequence if reversible else SequentialSequence
@@ -256,12 +285,12 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
-        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q)
+        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero)
         self.to_logits = nn.Linear(dim, num_tokens)
 
     def forward(self, x, **kwargs):

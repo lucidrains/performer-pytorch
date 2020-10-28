@@ -32,6 +32,8 @@ model = PerformerLM(
     kernel_fn = nn.ReLU(),          # the kernel function to be used, if generalized attention is turned on, defaults to Relu
     reversible = True,              # reversible layers, from Reformer paper
     ff_chunks = 10,                 # chunk feedforward layer, from Reformer paper
+    use_scalenorm = False,          # use scale norm, from 'Transformers without Tears' paper
+    use_rezero = False              # use rezero, from 'Rezero is all you need' paper
 )
 
 x = torch.randint(0, 20000, (1, 2048))
@@ -86,5 +88,24 @@ model(x) # (1, 2048, 512)
     title   = {Transformers are RNNs: Fast Autoregressive Transformers with Linear Attention},
     booktitle = {Proceedings of the International Conference on Machine Learning (ICML)},
     year    = {2020}
+}
+```
+
+```bibtex
+@misc{bachlechner2020rezero,
+    title   = {ReZero is All You Need: Fast Convergence at Large Depth},
+    author  = {Thomas Bachlechner and Bodhisattwa Prasad Majumder and Huanru Henry Mao and Garrison W. Cottrell and Julian McAuley},
+    year    = {2020},
+    url     = {https://arxiv.org/abs/2003.04887}
+}
+```
+
+```bibtex
+@article{1910.05895,
+    author  = {Toan Q. Nguyen and Julian Salazar},
+    title   = {Transformers without Tears: Improving the Normalization of Self-Attention},
+    year    = {2019},
+    eprint  = {arXiv:1910.05895},
+    doi     = {10.5281/zenodo.3525484},
 }
 ```
