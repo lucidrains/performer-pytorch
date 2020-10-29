@@ -59,6 +59,22 @@ x = torch.randn(1, 2048, 512)
 model(x) # (1, 2048, 512)
 ```
 
+Standalone self-attention layer with linear complexity in respect to sequence length, for replacing trained full-attention transformer self-attention layers.
+
+```python
+import torch
+from performer_pytorch import SelfAttention
+
+attn = SelfAttention(
+    dim = 512,
+    heads = 8,
+    causal = False,
+).cuda()
+
+x = torch.randn(1, 1024, 512).cuda()
+attn(x) # (1, 1024, 512)
+```
+
 ## Citations
 
 ```bibtex
