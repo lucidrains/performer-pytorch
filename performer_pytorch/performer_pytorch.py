@@ -110,7 +110,7 @@ def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, qr_unifo
 
 # non-causal linear attention
 def linear_attention(q, k, v):
-    D_inv = torch.einsum('...nd,...d->...n', q, k.sum(dim = -2))
+    D_inv = 1. / torch.einsum('...nd,...d->...n', q, k.sum(dim = -2))
     context = torch.einsum('...nd,...ne->...de', k, v)
     out = torch.einsum('...de,...nd,...n->...ne', context, q, D_inv)
     return out
