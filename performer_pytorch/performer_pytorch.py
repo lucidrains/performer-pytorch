@@ -285,20 +285,27 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, tie_embedding = False):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
+
+        nn.init.normal_(self.token_emb.weight, std = 0.02)
+        nn.init.normal_(self.pos_emb.weight, std = 0.02)
+
         self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero)
-        self.to_logits = nn.Sequential(
-            nn.LayerNorm(dim),
-            nn.Linear(dim, num_tokens)
-        )
+        self.norm = nn.LayerNorm(dim)
+
+        if tie_embedding:
+            self.to_logits = lambda t: t @ self.token_emb.weight.t()
+        else:
+            self.to_logits = nn.Linear(dim, num_tokens)
 
     def forward(self, x, **kwargs):
         b, n, device = *x.shape, x.device
         x = self.token_emb(x)
         x += self.pos_emb(torch.arange(n, device = device))
         x = self.performer(x, **kwargs)
+        x = self.norm(x)
         return self.to_logits(x)

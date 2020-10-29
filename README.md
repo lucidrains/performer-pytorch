@@ -33,7 +33,8 @@ model = PerformerLM(
     reversible = True,              # reversible layers, from Reformer paper
     ff_chunks = 10,                 # chunk feedforward layer, from Reformer paper
     use_scalenorm = False,          # use scale norm, from 'Transformers without Tears' paper
-    use_rezero = False              # use rezero, from 'Rezero is all you need' paper
+    use_rezero = False,             # use rezero, from 'Rezero is all you need' paper
+    tie_embedding = False           # multiply final embeddings with token weights for logits, like gpt decoder
 )
 
 x = torch.randint(0, 20000, (1, 2048))
