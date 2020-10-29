@@ -291,7 +291,10 @@ class PerformerLM(nn.Module):
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
         self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero)
-        self.to_logits = nn.Linear(dim, num_tokens)
+        self.to_logits = nn.Sequential(
+            nn.LayerNorm(dim),
+            nn.Linear(dim, num_tokens)
+        )
 
     def forward(self, x, **kwargs):
         b, n, device = *x.shape, x.device
