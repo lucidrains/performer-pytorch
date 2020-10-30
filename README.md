@@ -34,7 +34,11 @@ model = PerformerLM(
     ff_chunks = 10,                 # chunk feedforward layer, from Reformer paper
     use_scalenorm = False,          # use scale norm, from 'Transformers without Tears' paper
     use_rezero = False,             # use rezero, from 'Rezero is all you need' paper
-    tie_embedding = False           # multiply final embeddings with token weights for logits, like gpt decoder
+    tie_embedding = False,          # multiply final embeddings with token weights for logits, like gpt decoder
+    ff_glu = True,                  # use GLU variant for feedforward
+    emb_dropout = 0.1,              # embedding dropout
+    ff_dropout = 0.1,               # feedforward dropout
+    attn_dropout = 0.1,             # post-attn dropout
 )
 
 x = torch.randint(0, 20000, (1, 2048))
@@ -124,5 +128,14 @@ attn(x) # (1, 1024, 512)
     year    = {2019},
     eprint  = {arXiv:1910.05895},
     doi     = {10.5281/zenodo.3525484},
+}
+```
+
+```bibtex
+@misc{shazeer2020glu,
+    title   = {GLU Variants Improve Transformer},
+    author  = {Noam Shazeer},
+    year    = {2020},
+    url     = {https://arxiv.org/abs/2002.05202}
 }
 ```

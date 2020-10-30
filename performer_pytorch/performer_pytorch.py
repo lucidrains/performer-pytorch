@@ -7,10 +7,6 @@ from functools import partial
 
 from performer_pytorch.reversible import ReversibleSequence, SequentialSequence
 
-# need to use EPFL's causal product cuda code for autoregressive case
-
-from fast_transformers.causal_product import CausalDotProduct
-
 # helpers
 
 def exists(val):
@@ -117,6 +113,7 @@ def linear_attention(q, k, v):
 
 # efficient causal linear attention, created by EPFL
 def causal_linear_attention(q, k, v):
+    from fast_transformers.causal_product import CausalDotProduct
     return CausalDotProduct.apply(q, k, v)
 
 # inefficient causal linear attention, without cuda code, for reader's reference
@@ -222,18 +219,30 @@ class Chunk(nn.Module):
         return torch.cat([self.fn(c, **kwargs) for c in chunks], dim = self.dim)
 
 class FeedForward(nn.Module):
-    def __init__(self, dim, mult = 4):
+    def __init__(self, dim, mult = 4, dropout = 0., activation = None, glu = False):
         super().__init__()
-        self.net = nn.Sequential(
-            nn.Linear(dim, dim * mult),
-            nn.GELU(),
-            nn.Linear(dim * mult, dim)
-        )
-    def forward(self, x):
-        return self.net(x)
+        activation = default(activation, nn.GELU)
+
+        self.glu = glu
+        self.w1 = nn.Linear(dim, dim * mult * (2 if glu else 1))
+        self.act = activation()
+        self.dropout = nn.Dropout(dropout)
+        self.w2 = nn.Linear(dim * mult, dim)
+
+    def forward(self, x, **kwargs):
+        if not self.glu:
+            x = self.w1(x)
+            x = self.act(x)
+        else:
+            x, v = self.w1(x).chunk(2, dim=-1)
+            x = self.act(x) * v
+
+        x = self.dropout(x)
+        x = self.w2(x)
+        return x
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, causal = False, heads = 8, nb_features = None, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False):
+    def __init__(self, dim, causal = False, heads = 8, nb_features = None, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0.):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
         self.fast_attention = FastAttention(dim // heads, nb_features, redraw_projection, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q)
@@ -241,6 +250,7 @@ class SelfAttention(nn.Module):
         self.heads = heads
         self.to_qkv = nn.Linear(dim, dim * 3, bias = False)
         self.to_out = nn.Linear(dim, dim)
+        self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask = None):
         b, n, _, h = *x.shape, self.heads
@@ -256,10 +266,10 @@ class SelfAttention(nn.Module):
 
         out = rearrange(out, 'b h n d -> b n (h d)')
         out =  self.to_out(out)
-        return out
+        return self.dropout(out)
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False):
+    def __init__(self, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0.):
         super().__init__()
         layers = nn.ModuleList([])
 
@@ -272,8 +282,8 @@ class Performer(nn.Module):
 
         for _ in range(depth):
             layers.append(nn.ModuleList([
-                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q)),
-                wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult), along_dim = 1))
+                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout)),
+                wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
             ]))
 
         execute_type = ReversibleSequence if reversible else SequentialSequence
@@ -285,16 +295,17 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, tie_embedding = False):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, tie_embedding = False):
         super().__init__()
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(num_tokens, dim)
         self.pos_emb = nn.Embedding(max_seq_len, dim)
+        self.dropout = nn.Dropout(emb_dropout)
 
         nn.init.normal_(self.token_emb.weight, std = 0.02)
         nn.init.normal_(self.pos_emb.weight, std = 0.02)
 
-        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero)
+        self.performer = Performer(dim, depth, heads, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout)
         self.norm = nn.LayerNorm(dim)
 
         if tie_embedding:
@@ -304,8 +315,14 @@ class PerformerLM(nn.Module):
 
     def forward(self, x, **kwargs):
         b, n, device = *x.shape, x.device
+        # token and positoinal embeddings
         x = self.token_emb(x)
         x += self.pos_emb(torch.arange(n, device = device))
+        x = self.dropout(x)
+
+        # performer layers
         x = self.performer(x, **kwargs)
+
+        # norm and to logits
         x = self.norm(x)
         return self.to_logits(x)
