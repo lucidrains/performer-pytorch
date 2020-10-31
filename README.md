@@ -80,6 +80,16 @@ x = torch.randn(1, 1024, 512).cuda()
 attn(x) # (1, 1024, 512)
 ```
 
+## Advanced
+
+At the end of training, if you wish to fix the projection matrices to get the model to output deterministically, you can invoke the following
+
+```python
+model.fix_projection_matrices_()
+```
+
+Now your model will have fixed projection matrices across all layers
+
 ## Citations
 
 ```bibtex

@@ -15,6 +15,12 @@ def exists(val):
 def default(val, d):
     return val if exists(val) else d
 
+def get_module_device(module):
+    return next(module.parameters()).device
+
+def find_modules(nn_module, type):
+    return [module for module in nn_module.modules() if isinstance(module, type)]
+
 # kernel functions
 
 # transcribed from jax to pytorch from
@@ -142,8 +148,7 @@ class FastAttention(nn.Module):
         self.kernel_fn = kernel_fn
 
         if not redraw_projection:
-            projection_matrix = self.create_projection()
-            self.register_buffer('projection_matrix', projection_matrix)
+            self.set_projection_matrix()
 
         self.causal = causal
         if causal:
@@ -154,10 +159,14 @@ class FastAttention(nn.Module):
                 print('unable to import cuda code for auto-regressive Performer. will default to the memory inefficient non-cuda version')
                 self.causal_linear_fn = causal_linear_attention_noncuda
 
+    def set_projection_matrix(self, device):
+        projection_matrix = self.create_projection(device = device)
+        self.register_buffer('projection_matrix', projection_matrix)
+
     def forward(self, q, k, v):
         device = q.device
 
-        if self.redraw_projection:
+        if self.redraw_projection and not hasattr(self, 'projection_matrix'):
             projection_matrix = self.create_projection(device = device)
         else:
             projection_matrix = self.projection_matrix
@@ -312,6 +321,12 @@ class PerformerLM(nn.Module):
             self.to_logits = lambda t: t @ self.token_emb.weight.t()
         else:
             self.to_logits = nn.Linear(dim, num_tokens)
+
+    def fix_projection_matrices_(self):
+        fast_attentions = find_modules(self, FastAttention)
+        device = get_module_device(self)
+        for fast_attention in fast_attentions:
+            fast_attention.set_projection_matrix(device)
 
     def forward(self, x, **kwargs):
         b, n, device = *x.shape, x.device
