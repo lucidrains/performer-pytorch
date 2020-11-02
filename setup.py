@@ -16,9 +16,10 @@ setup(
     'transformers'
   ],
   install_requires=[
+    'einops>=0.3',
+    'local-attention>=1.1.1',
     'pytorch-fast-transformers>=0.3.0',
     'torch>=1.6',
-    'einops>=0.3'
   ],
   classifiers=[
     'Development Status :: 4 - Beta',

@@ -24,7 +24,7 @@ model = PerformerLM(
     num_tokens = 20000,
     max_seq_len = 2048,             # max sequence length
     dim = 512,                      # dimension
-    depth = 6,                      # layers
+    depth = 12,                     # layers
     heads = 8,                      # heads
     causal = False,                 # auto-regressive or not
     nb_features = 256,              # number of random features, if not set, will default to (d * log(d)), where d is the dimension of each head
@@ -39,6 +39,8 @@ model = PerformerLM(
     emb_dropout = 0.1,              # embedding dropout
     ff_dropout = 0.1,               # feedforward dropout
     attn_dropout = 0.1,             # post-attn dropout
+    local_attn_heads = 4,           # 4 heads are local attention, 4 others are global performers
+    local_window_size = 256         # window size of local attention
 )
 
 x = torch.randint(0, 20000, (1, 2048))
