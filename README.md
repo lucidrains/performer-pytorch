@@ -151,3 +151,12 @@ Now your model will have fixed projection matrices across all layers
     url     = {https://arxiv.org/abs/2002.05202}
 }
 ```
+
+```bibtex
+@misc{roy*2020efficient,
+    title   = {Efficient Content-Based Sparse Attention with Routing Transformers},
+    author  = {Aurko Roy* and Mohammad Taghi Saffar* and David Grangier and Ashish Vaswani},
+    year    = {2020},
+    url     = {https://arxiv.org/pdf/2003.05997.pdf}
+}
+```
