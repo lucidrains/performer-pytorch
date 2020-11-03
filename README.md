@@ -82,6 +82,28 @@ x = torch.randn(1, 1024, 512).cuda()
 attn(x) # (1, 1024, 512)
 ```
 
+To minimize model surgery, you could also simply rewrite the code, so that the attention step is done by the `FastAttention` module, as follows.
+
+```python
+import torch
+from performer_pytorch import FastAttention
+
+# queries / keys / values with heads already split and transposed to first dimension
+# 8 heads, dimension of head is 64, sequence length of 512
+q = torch.randn(1, 8, 512, 64)
+k = torch.randn(1, 8, 512, 64)
+v = torch.randn(1, 8, 512, 64)
+
+attn_fn = FastAttention(
+    dim_heads = 64,
+    nb_features = 256,
+    causal = False
+)
+
+out = attn_fn(q, k, v) # (1, 8, 512, 64)
+# now merge heads and combine outputs with Wo
+```
+
 ## Advanced
 
 At the end of training, if you wish to fix the projection matrices to get the model to output deterministically, you can invoke the following
