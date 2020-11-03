@@ -267,13 +267,15 @@ class SelfAttention(nn.Module):
         self.global_heads = heads - local_heads
         self.local_attn = LocalAttention(window_size = local_window_size, causal = causal, autopad = True, dropout = dropout, look_forward = int(not causal)) if local_heads > 0 else None
 
-        self.to_qkv = nn.Linear(dim, dim * 3, bias = False)
+        self.to_q = nn.Linear(dim, dim)
+        self.to_k = nn.Linear(dim, dim)
+        self.to_v = nn.Linear(dim, dim)
         self.to_out = nn.Linear(dim, dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, mask = None):
         b, n, _, h, gh = *x.shape, self.heads, self.global_heads
-        qkv = self.to_qkv(x).chunk(3, dim = -1)
+        qkv = map(lambda fn: fn(x), (self.to_q, self.to_k, self.to_v))
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), qkv)
         (q, lq), (k, lk), (v, lv) = map(lambda t: (t[:, :gh], t[:, gh:]), (q, k, v))
