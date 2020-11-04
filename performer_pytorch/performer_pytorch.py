@@ -36,12 +36,9 @@ def find_modules(nn_module, type):
 def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, eps=1e-4, device = None):
     b, h, *_ = data.shape
 
-    if normalize_data:
-        data_normalizer = 1.0 / (data.shape[-1] ** 0.25)
-    else:
-        data_normalizer = 1.0
+    data_normalizer = (data.shape[-1] ** -0.25) if normalize_data else 1.
 
-    ratio = 1.0 / (projection_matrix.shape[0] ** 0.5)
+    ratio = (projection_matrix.shape[0] ** -0.5)
 
     projection = repeat(projection_matrix, 'j d -> b h j d', b = b, h = h)
 
@@ -65,10 +62,7 @@ def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, ep
 def generalized_kernel(data, *, projection_matrix, kernel_fn = nn.ReLU(), kernel_epsilon = 0.001, normalize_data = True, device = None):
     b, h, *_ = data.shape
 
-    if normalize_data:
-        data_normalizer = 1.0 / (data.shape[-1] ** 0.25)
-    else:
-        data_normalizer = 1.0
+    data_normalizer = (data.shape[-1] ** -0.25) if normalize_data else 1.
 
     if projection_matrix is None:
         return kernel_fn(data_normalizer * data) + kernel_epsilon
@@ -308,7 +302,7 @@ class Performer(nn.Module):
         local_attn_heads = cast_tuple(local_attn_heads)
         local_attn_heads = local_attn_heads * depth if len(local_attn_heads) == 1 else local_attn_heads
         assert len(local_attn_heads) == depth, 'tuple specifying number of local attention heads per depth must be equal to the total depth'
-        assert all(map(lambda n: n > 0 and n <= heads, local_attn_heads)), 'local attention head value must be less than the total number of heads'
+        assert all(map(lambda n: n >= 0 and n <= heads, local_attn_heads)), 'local attention head value must be less than the total number of heads'
 
         if use_scalenorm:
             wrapper_fn = partial(PreScaleNorm, dim)
