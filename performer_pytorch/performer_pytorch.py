@@ -326,7 +326,7 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, tie_embedding = False):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False):
         super().__init__()
         local_attn_heads = cast_tuple(local_attn_heads)
 
@@ -340,11 +340,6 @@ class PerformerLM(nn.Module):
 
         self.performer = Performer(dim, depth, heads, local_attn_heads, local_window_size, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout)
         self.norm = nn.LayerNorm(dim)
-
-        if tie_embedding:
-            self.to_logits = lambda t: t @ self.token_emb.weight.t()
-        else:
-            self.to_logits = nn.Linear(dim, num_tokens)
 
     def fix_projection_matrices_(self):
         fast_attentions = find_modules(self, FastAttention)
@@ -364,4 +359,4 @@ class PerformerLM(nn.Module):
 
         # norm and to logits
         x = self.norm(x)
-        return self.to_logits(x)
+        return x @ self.token_emb.weight.t()
