@@ -256,11 +256,12 @@ class SelfAttention(nn.Module):
     def __init__(self, dim, causal = False, heads = 8, local_heads = 0, local_window_size = 256, nb_features = None, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0.):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
-        self.fast_attention = FastAttention(dim // heads, nb_features, redraw_projection, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q)
+        dim_head = dim // heads
+        self.fast_attention = FastAttention(dim_head, nb_features, redraw_projection, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q)
 
         self.heads = heads
         self.global_heads = heads - local_heads
-        self.local_attn = LocalAttention(window_size = local_window_size, causal = causal, autopad = True, dropout = dropout, look_forward = int(not causal)) if local_heads > 0 else None
+        self.local_attn = LocalAttention(window_size = local_window_size, causal = causal, autopad = True, dropout = dropout, look_forward = int(not causal), rel_pos_emb_config = (dim_head, local_heads)) if local_heads > 0 else None
 
         self.to_q = nn.Linear(dim, dim)
         self.to_k = nn.Linear(dim, dim)
@@ -348,7 +349,7 @@ class PerformerLM(nn.Module):
 
     def forward(self, x, **kwargs):
         b, n, device = *x.shape, x.device
-        # token and positoinal embeddings
+        # token and positional embeddings
         x = self.token_emb(x)
         x += self.pos_emb(torch.arange(n, device = device))
         x = self.dropout(x)
