@@ -306,7 +306,7 @@ class Performer(nn.Module):
         local_attn_heads = cast_tuple(local_attn_heads)
         local_attn_heads = local_attn_heads * depth if len(local_attn_heads) == 1 else local_attn_heads
         assert len(local_attn_heads) == depth, 'tuple specifying number of local attention heads per depth must be equal to the total depth'
-        assert all(map(lambda n: n > 0 and n <= heads, local_attn_heads)), 'local attention head value must be less than the total number of heads'
+        assert all(map(lambda n: n >= 0 and n <= heads, local_attn_heads)), 'local attention head value must be less than the total number of heads'
 
         if use_scalenorm:
             wrapper_fn = partial(PreScaleNorm, dim)
