@@ -252,7 +252,7 @@ class FeedForward(nn.Module):
         x = self.w2(x)
         return x
 
-class SelfAttention(nn.Module):
+class BaseAttention(nn.Module):
     def __init__(self, dim, causal = False, heads = 8, local_heads = 0, local_window_size = 256, nb_features = None, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0.):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
@@ -269,11 +269,9 @@ class SelfAttention(nn.Module):
         self.to_out = nn.Linear(dim, dim)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, mask = None):
-        b, n, _, h, gh = *x.shape, self.heads, self.global_heads
-        qkv = map(lambda fn: fn(x), (self.to_q, self.to_k, self.to_v))
-
-        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), qkv)
+    def attn_calc(self, qkv, mask=None):
+        h, gh = self.heads, self.global_heads
+        q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h=h), qkv)
         (q, lq), (k, lk), (v, lv) = map(lambda t: (t[:, :gh], t[:, gh:]), (q, k, v))
 
         attn_outs = []
@@ -292,8 +290,36 @@ class SelfAttention(nn.Module):
 
         out = torch.cat(attn_outs, dim = 1)
         out = rearrange(out, 'b h n d -> b n (h d)')
-        out =  self.to_out(out)
+        out = self.to_out(out)
         return self.dropout(out)
+
+    def forward(self,*args, **kwargs):
+        raise NotImplementedError("Attention mechanism not implemented for base class")
+
+
+class SelfAttention(BaseAttention):
+    def __init__(self, dim, causal = False, heads = 8, local_heads = 0, local_window_size = 256, nb_features = None, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0.):
+        super().__init__(dim, causal=causal, heads=heads, local_heads=local_heads,
+                         local_window_size=local_window_size, nb_features=nb_features,
+                         redraw_projection=redraw_projection, generalized_attention=generalized_attention,
+                         kernel_fn=kernel_fn, qr_uniform_q=qr_uniform_q, dropout=dropout)
+
+    def forward(self, x, mask = None):
+        qkv = map(lambda fn: fn(x), (self.to_q, self.to_k, self.to_v))
+        return self.attn_calc(qkv, mask=mask)
+
+
+class DecoderAttention(BaseAttention):
+    def __init__(self, dim, causal = False, heads = 8, local_heads = 0, local_window_size = 256, nb_features = None, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0.):
+        super().__init__(dim, causal=causal, heads=heads, local_heads=local_heads,
+                         local_window_size=local_window_size, nb_features=nb_features,
+                         redraw_projection=redraw_projection, generalized_attention=generalized_attention,
+                         kernel_fn=kernel_fn, qr_uniform_q=qr_uniform_q, dropout=dropout)
+
+    def forward(self, x, enc=None, mask = None):
+        qkv =  (self.to_q(x), self.to_k(enc), self.to_v(enc))
+        return self.attn_calc(qkv, mask=mask)
+
 
 class Performer(nn.Module):
     def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0.):
@@ -324,6 +350,42 @@ class Performer(nn.Module):
 
     def forward(self, x, **kwargs):
         return self.net(x, **kwargs)
+
+class PerformerDecoder(nn.Module):
+    def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0.):
+        super().__init__()
+        layers = nn.ModuleList([])
+        local_attn_heads = cast_tuple(local_attn_heads)
+        local_attn_heads = local_attn_heads * depth if len(local_attn_heads) == 1 else local_attn_heads
+        assert len(local_attn_heads) == depth, 'tuple specifying number of local attention heads per depth must be equal to the total depth'
+        assert all(map(lambda n: n >= 0 and n <= heads, local_attn_heads)), 'local attention head value must be less than the total number of heads'
+
+        if use_scalenorm:
+            wrapper_fn = partial(PreScaleNorm, dim)
+        elif use_rezero:
+            wrapper_fn = ReZero
+        else:
+            wrapper_fn = partial(PreLayerNorm, dim)
+
+        for _, local_heads in zip(range(depth), local_attn_heads):
+            layers.append(nn.ModuleList([
+                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout)),
+                wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
+            ]))
+            layers.append(nn.ModuleList([
+                wrapper_fn(DecoderAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout)),
+                wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
+            ]))
+
+        execute_type = ReversibleSequence if reversible else SequentialSequence
+        route_mask = ((True, False),) * 2 * depth
+        route_enc = ((False, False), (True, False)) * depth
+        attn_route_map = {'mask': route_mask,
+                          'enc': route_enc}
+        self.net = execute_type(layers, args_route = {**attn_route_map})
+
+    def forward(self, x, enc, **kwargs):
+        return self.net(x, enc=enc, **kwargs)
 
 class PerformerLM(nn.Module):
     def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False):
