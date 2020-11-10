@@ -317,8 +317,6 @@ class DecoderAttention(BaseAttention):
                          kernel_fn=kernel_fn, qr_uniform_q=qr_uniform_q, dropout=dropout)
 
     def forward(self, x, enc=None, mask = None):
-        if enc is None:
-            raise ValueError("DecoderAttention requires an encoded sequence")
         qkv =  (self.to_q(x), self.to_k(enc), self.to_v(enc))
         return self.attn_calc(qkv, mask=mask)
 
