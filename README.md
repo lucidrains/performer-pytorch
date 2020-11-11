@@ -66,6 +66,39 @@ x = torch.randn(1, 2048, 512)
 model(x) # (1, 2048, 512)
 ```
 
+Full encoder / decoder
+
+```python
+import torch
+from performer_pytorch import PerformerLM
+
+enc = PerformerLM(
+    num_tokens = 20000,
+    max_seq_len = 2048,
+    dim = 512,
+    depth = 6,
+    heads = 8
+).cuda()
+
+dec = PerformerLM(
+    num_tokens = 20000,
+    max_seq_len = 2048,
+    dim = 512,
+    depth = 6,
+    heads = 8,
+    causal = True,
+    cross_attend = True
+).cuda()
+
+src = torch.randint(0, 20000, (1, 2048)).cuda()
+tgt = torch.randint(0, 20000, (1, 2048)).cuda()
+src_mask = torch.ones_like(src).bool()
+tgt_mask = torch.ones_like(src).bool()
+
+encodings = enc(src, mask = src_mask, return_encodings = True)
+logits = dec(tgt, context = encodings, mask = tgt_mask, context_mask = src_mask) # (1, 2048, 20000)
+```
+
 Standalone self-attention layer with linear complexity in respect to sequence length, for replacing trained full-attention transformer self-attention layers.
 
 ```python
