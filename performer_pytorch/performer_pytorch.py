@@ -150,7 +150,7 @@ class FastAttention(nn.Module):
         self.kernel_fn = kernel_fn
 
         if not redraw_projection:
-            self.set_projection_matrix()
+            self.set_projection_matrix('cpu')
 
         self.causal = causal
         if causal:
