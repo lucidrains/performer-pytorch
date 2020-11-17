@@ -190,7 +190,7 @@ class FastAttention(nn.Module):
 class ReZero(nn.Module):
     def __init__(self, fn):
         super().__init__()
-        self.g = nn.Parameter(torch.zeros(1))
+        self.g = nn.Parameter(torch.tensor(1e-3))
         self.fn = fn
 
     def forward(self, x, **kwargs):
