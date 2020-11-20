@@ -144,7 +144,7 @@ class FastAttention(nn.Module):
         self.ortho_scaling = ortho_scaling
         
         self.feature_redraw_interval = feature_redraw_interval
-        self.calls_since_last_redraw = 0
+        self.register_buffer('calls_since_last_redraw', torch.tensor(0)) # Make sure this is persistent
 
         self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = self.nb_features, nb_columns = dim_heads, scaling = ortho_scaling, qr_uniform_q = qr_uniform_q)
 
@@ -170,7 +170,7 @@ class FastAttention(nn.Module):
         # It's time to redraw the projection matrix
         elif exists(self.feature_redraw_interval) and self.calls_since_last_redraw >= self.feature_redraw_interval:
             self.projection_matrix = self.create_projection(device = device)
-            self.calls_since_last_redraw = 0
+            self.calls_since_last_redraw = torch.tensor(0)
         # Keep track of how many forward passes we do before we redraw again
         else:
             self.calls_since_last_redraw += 1
