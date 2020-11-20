@@ -135,22 +135,22 @@ def causal_linear_attention_noncuda(q, k, v):
     return out
 
 class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = None, redraw_projection = True, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False):
+    def __init__(self, dim_heads, nb_features = None, feature_redraw_interval = 1000, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False):
         super().__init__()
         nb_features = default(nb_features, int(dim_heads * math.log(dim_heads)))
 
         self.dim_heads = dim_heads
         self.nb_features = nb_features
         self.ortho_scaling = ortho_scaling
-        self.redraw_projection = redraw_projection
+        
+        self.feature_redraw_interval = feature_redraw_interval
+        self.calls_since_last_redraw = 0
+        self.projection_matrix = None
 
         self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = self.nb_features, nb_columns = dim_heads, scaling = ortho_scaling, qr_uniform_q = qr_uniform_q)
 
         self.generalized_attention = generalized_attention
         self.kernel_fn = kernel_fn
-
-        if not redraw_projection:
-            self.set_projection_matrix(torch.device('cpu'))
 
         self.causal = causal
         if causal:
@@ -161,23 +161,28 @@ class FastAttention(nn.Module):
                 print('unable to import cuda code for auto-regressive Performer. will default to the memory inefficient non-cuda version')
                 self.causal_linear_fn = causal_linear_attention_noncuda
 
-    def set_projection_matrix(self, device):
+    def update_projection_matrix(self, device):
         projection_matrix = self.create_projection(device = device)
-        self.register_buffer('projection_matrix', projection_matrix)
+        
+        if not exists(self.projection_matrix):
+            self.register_buffer('projection_matrix', projection_matrix)
+        else:
+            self.projection_matrix = projection_matrix
 
     def forward(self, q, k, v):
         device = q.device
 
-        if self.redraw_projection and not hasattr(self, 'projection_matrix'):
-            projection_matrix = self.create_projection(device = device)
+        if not exists(self.projection_matrix) or self.calls_since_last_redraw >= self.feature_redraw_interval:
+            self.update_projection_matrix(device = device)
+            self.calls_since_last_redraw = 0
         else:
-            projection_matrix = self.projection_matrix
+            self.calls_since_last_redraw += 1
 
         if self.generalized_attention:
-            create_kernel = partial(generalized_kernel, kernel_fn = self.kernel_fn, projection_matrix = projection_matrix, device = device)
+            create_kernel = partial(generalized_kernel, kernel_fn = self.kernel_fn, projection_matrix = self.projection_matrix, device = device)
             q, k = map(create_kernel, (q, k))
         else:
-            create_kernel = partial(softmax_kernel, projection_matrix = projection_matrix, device = device)
+            create_kernel = partial(softmax_kernel, projection_matrix = self.projection_matrix, device = device)
             q = create_kernel(q, is_query = True)
             k = create_kernel(k, is_query = False)
 
@@ -253,11 +258,11 @@ class FeedForward(nn.Module):
         return x
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, causal = False, heads = 8, local_heads = 0, local_window_size = 256, nb_features = None, redraw_projection = True, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0.):
+    def __init__(self, dim, causal = False, heads = 8, local_heads = 0, local_window_size = 256, nb_features = None, feature_redraw_interval = 1000, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0.):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
         dim_head = dim // heads
-        self.fast_attention = FastAttention(dim_head, nb_features, redraw_projection, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q)
+        self.fast_attention = FastAttention(dim_head, nb_features, feature_redraw_interval, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q)
 
         self.heads = heads
         self.global_heads = heads - local_heads
