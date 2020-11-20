@@ -145,7 +145,6 @@ class FastAttention(nn.Module):
         
         self.feature_redraw_interval = feature_redraw_interval
         self.calls_since_last_redraw = 0
-        self.projection_matrix = None
 
         self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = self.nb_features, nb_columns = dim_heads, scaling = ortho_scaling, qr_uniform_q = qr_uniform_q)
 
@@ -161,20 +160,18 @@ class FastAttention(nn.Module):
                 print('unable to import cuda code for auto-regressive Performer. will default to the memory inefficient non-cuda version')
                 self.causal_linear_fn = causal_linear_attention_noncuda
 
-    def update_projection_matrix(self, device):
-        projection_matrix = self.create_projection(device = device)
-        
-        if not exists(self.projection_matrix):
-            self.register_buffer('projection_matrix', projection_matrix)
-        else:
-            self.projection_matrix = projection_matrix
-
     def forward(self, q, k, v):
         device = q.device
-
-        if not exists(self.projection_matrix) or self.calls_since_last_redraw >= self.feature_redraw_interval:
-            self.update_projection_matrix(device = device)
+        
+        # We haven't created the projection matrix yet, let's create it
+        if not hasattr(self, 'projection_matrix'):
+            projection_matrix = self.create_projection(device = device)
+            self.register_buffer('projection_matrix', projection_matrix)
+        # It's time to redraw the projection matrix
+        elif exists(self.feature_redraw_interval) and self.calls_since_last_redraw >= self.feature_redraw_interval:
+            self.projection_matrix = self.create_projection(device = device)
             self.calls_since_last_redraw = 0
+        # Keep track of how many forward passes we do before we redraw again
         else:
             self.calls_since_last_redraw += 1
 
@@ -367,7 +364,7 @@ class PerformerLM(nn.Module):
         fast_attentions = find_modules(self, FastAttention)
         device = get_module_device(self)
         for fast_attention in fast_attentions:
-            fast_attention.set_projection_matrix(device)
+            fast_attention.feature_redraw_interval = None
 
     def forward(self, x, return_encodings = False, **kwargs):
         b, n, device = *x.shape, x.device
