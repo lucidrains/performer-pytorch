@@ -43,16 +43,21 @@ class AutoregressiveWrapper(nn.Module):
 
         self.net.eval()
         out = start_tokens
-        input_mask = kwargs.pop('input_mask', None)
+        input_mask = kwargs.pop('mask', None)
 
         if input_mask is None:
             input_mask = torch.full_like(out, True, dtype=torch.bool, device=out.device)
+        
+        # in case of conditional generation, if enc_mask is not provided use the correct context_mask
+        context = kwargs.pop('context', None)
+        context_mask = kwargs.pop('context_mask', None)
+        if context is not None and context_mask is None:
+            context_mask = torch.full(context.shape[:2], True, dtype=torch.bool, device=out.device)
 
         for _ in range(seq_len):
             x = out[:, -self.max_seq_len:]
             input_mask = input_mask[:, -self.max_seq_len:]
-
-            logits = self.net(x, input_mask=input_mask, **kwargs)[:, -1, :]
+            logits = self.net(x, mask=input_mask, **kwargs)[:, -1, :]
             filtered_logits = filter_logits_fn(logits, thres = filter_thres)
             probs = F.softmax(filtered_logits / temperature, dim=-1)
             sample = torch.multinomial(probs, 1)
@@ -85,10 +90,10 @@ class AutoregressiveWrapper(nn.Module):
 
             # help auto-solve an area of confusion around input masks in auto-regressive
             # if user supplies a mask that is only off by one from the source sequence, resolve it for them
-            mask = kwargs.pop('input_mask', None)
+            mask = kwargs.pop('mask', None)
             if mask is not None and mask.shape[1] == x.shape[1]:
                 mask = mask[:, :-1]
-                kwargs.update(input_mask = mask)
+            kwargs.update(mask = mask)
         else:
             xi = pad(list(map(lambda t: t[:-1], x)))
             xo = pad(list(map(lambda t: t[1:], x)))

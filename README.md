@@ -98,6 +98,56 @@ tgt_mask = torch.ones_like(src).bool()
 encodings = enc(src, mask = src_mask, return_encodings = True)
 logits = dec(tgt, context = encodings, mask = tgt_mask, context_mask = src_mask) # (1, 2048, 20000)
 ```
+You can also use the Performer Encoder Decoder Architecture
+
+```python
+from performer_pytorch import PerformerEncDec
+import torch
+
+IN_SEQ_LEN = 4096
+OUT_SEQ_LEN = 4096
+GENERATE_LEN = 512
+
+enc_dec = PerformerEncDec(
+    dim = 512,
+    enc_num_tokens = 20000,
+    enc_depth = 6,
+    enc_heads = 8,
+    enc_max_seq_len = IN_SEQ_LEN,
+    dec_num_tokens = 20000,
+    dec_depth = 6,
+    dec_heads = 8,
+    dec_max_seq_len = OUT_SEQ_LEN
+)
+
+# if you have variable length sequences padding is done for you
+train_in = [
+    torch.randint(0, 20000, (120,)).long(),
+    torch.randint(0, 20000, (253,)).long(),
+    torch.randint(0, 20000, (646,)).long()
+]
+train_out = [
+    torch.randint(0, 20000, (110,)).long(),
+    torch.randint(0, 20000, (500,)).long(),
+    torch.randint(0, 20000, (585,)).long()
+]
+
+# you have to use masks for variable length sequences (decoder mask should be 1 smaller than longest tensor)
+in_mask = torch.arange(646).view(1, -1).expand(3, -1) < torch.tensor([120,253,646]).view(-1, 1)
+out_mask = torch.arange(584).view(1, -1).expand(3, -1) < torch.tensor([110,500,585]).view(-1, 1)
+
+# train
+enc_dec.train()
+loss = enc_dec(train_in, train_out, return_loss = True, enc_mask = in_mask, dec_mask = out_mask)
+loss.backward()
+
+# generate
+generate_in = torch.randint(0, 20000, (1, IN_SEQ_LEN)).long()
+generate_out_prime = torch.tensor([[0.]]).long() # prime with <bos> token
+samples = enc_dec.generate(generate_in, generate_out_prime, seq_len = GENERATE_LEN, eos_token = 1) # assume 1 is id of stop token
+print(samples.shape) # (1, <= GENERATE_LEN) decode the tokens
+```
+
 
 Standalone self-attention layer with linear complexity in respect to sequence length, for replacing trained full-attention transformer self-attention layers.
 
