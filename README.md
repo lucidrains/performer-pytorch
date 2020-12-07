@@ -98,7 +98,9 @@ tgt_mask = torch.ones_like(src).bool()
 encodings = enc(src, mask = src_mask, return_encodings = True)
 logits = dec(tgt, context = encodings, mask = tgt_mask, context_mask = src_mask) # (1, 2048, 20000)
 ```
-You can also use the Performer Encoder Decoder Architecture
+
+You can also use the Performer Encoder Decoder Architecture. Made by <a href="https://github.com/gulnazaki">Thomas Melistas</a>
+
 
 ```python
 from performer_pytorch import PerformerEncDec
