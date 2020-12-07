@@ -123,7 +123,10 @@ def linear_attention(q, k, v):
 # efficient causal linear attention, created by EPFL
 def causal_linear_attention(q, k, v):
     from fast_transformers.causal_product import CausalDotProduct
-    return CausalDotProduct.apply(q, k, v)
+    D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k.cumsum(dim=-2))
+    out = CausalDotProduct.apply(q, k, v)
+    out = torch.einsum('...nd,...n->...nd', out, D_inv)
+    return out
 
 # inefficient causal linear attention, without cuda code, for reader's reference
 # not being used
