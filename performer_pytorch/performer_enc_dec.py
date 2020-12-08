@@ -37,7 +37,14 @@ def extract_and_set_enc_dec_kwargs(kwargs):
     return enc_kwargs, dec_kwargs, kwargs
 
 class PerformerEncDec(nn.Module):
-    def __init__(self, dim, ignore_index = 0, pad_value = 0, **kwargs):
+    def __init__(
+        self,
+        dim,
+        ignore_index = 0,
+        pad_value = 0,
+        tie_token_embeds = False,
+        **kwargs
+    ):
         super().__init__()
         enc_kwargs, dec_kwargs, _ = extract_enc_dec_kwargs(kwargs)
         
@@ -50,7 +57,10 @@ class PerformerEncDec(nn.Module):
         enc = PerformerLM(**enc_kwargs)
         dec = PerformerLM(**dec_kwargs)
 
-        self.enc = AutoregressiveWrapper(enc, ignore_index = ignore_index, pad_value = pad_value)
+        if tie_token_embeds:
+            enc.token_embed = dec.token_embed
+
+        self.enc = enc
         self.dec = AutoregressiveWrapper(dec, ignore_index = ignore_index, pad_value = pad_value)
 
     def generate(self, seq_in, seq_out_start, seq_len, **kwargs):
