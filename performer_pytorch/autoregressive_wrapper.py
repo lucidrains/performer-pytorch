@@ -4,6 +4,9 @@ from torch import nn
 import torch.nn.functional as F
 from torch.nn.utils.rnn import pad_sequence
 
+def exists(val):
+    return val is not None
+
 def top_p(logits, thres = 0.9):
     sorted_logits, sorted_indices = torch.sort(logits, descending=True)
     cum_probs = torch.cumsum(F.softmax(sorted_logits, dim=-1), dim=-1)
@@ -49,10 +52,12 @@ class AutoregressiveWrapper(nn.Module):
             input_mask = torch.full_like(out, True, dtype=torch.bool, device=out.device)
         
         # in case of conditional generation, if enc_mask is not provided use the correct context_mask
-        context = kwargs.pop('context', None)
         context_mask = kwargs.pop('context_mask', None)
-        if context is not None and context_mask is None:
+
+        if 'context' in kwargs and not exists(context_mask):
+            context = kwargs['context']
             context_mask = torch.full(context.shape[:2], True, dtype=torch.bool, device=out.device)
+            kwargs.update(context_mask = context_mask)
 
         for _ in range(seq_len):
             x = out[:, -self.max_seq_len:]
