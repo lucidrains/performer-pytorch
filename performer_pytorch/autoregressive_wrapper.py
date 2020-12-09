@@ -57,7 +57,8 @@ class AutoregressiveWrapper(nn.Module):
         if 'context' in kwargs and not exists(context_mask):
             context = kwargs['context']
             context_mask = torch.full(context.shape[:2], True, dtype=torch.bool, device=out.device)
-            kwargs.update(context_mask = context_mask)
+
+        kwargs.update(context_mask = context_mask)
 
         for _ in range(seq_len):
             x = out[:, -self.max_seq_len:]
