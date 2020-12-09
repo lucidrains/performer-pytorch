@@ -43,6 +43,7 @@ class PerformerEncDec(nn.Module):
         ignore_index = 0,
         pad_value = 0,
         tie_token_embeds = False,
+        amp_autocast = False,
         **kwargs
     ):
         super().__init__()
@@ -51,6 +52,7 @@ class PerformerEncDec(nn.Module):
         assert 'dim' not in dec_kwargs and 'dim' not in enc_kwargs, 'you must set the dim for both encoder and decoder'
 
         enc_kwargs['dim'] = dec_kwargs['dim'] = dim
+        dec_kwargs['amp_autocast'] = amp_autocast
         dec_kwargs['causal'] = True
         dec_kwargs['cross_attend'] = True
 
