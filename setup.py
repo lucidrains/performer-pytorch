@@ -3,7 +3,7 @@ from setuptools import setup, find_packages
 setup(
   name = 'performer-pytorch',
   packages = find_packages(exclude=['examples']),
-  version = '0.12.6',
+  version = '0.12.7',
   license='MIT',
   description = 'Performer - Pytorch',
   author = 'Phil Wang',
