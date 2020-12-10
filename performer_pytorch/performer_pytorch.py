@@ -32,7 +32,7 @@ def find_modules(nn_module, type):
 # kernel functions
 
 # transcribed from jax to pytorch from
-# https://github.com/google-research/google-research/blob/master/performer/fast_self_attention/fast_self_attention.py
+# https://github.com/google-research/google-research/blob/master/performer/fast_attention/jax/fast_attention.py
 
 def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, eps=1e-4, device = None):
     b, h, *_ = data.shape
