@@ -41,7 +41,7 @@ def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, ep
 
     ratio = (projection_matrix.shape[0] ** -0.5)
 
-    projection = repeat(projection_matrix, 'j d -> b h j d', b = b, h = h)
+    projection = repeat(projection_matrix, 'j d -> b h j d', b = b, h = h).type_as(data)
 
     data_dash = torch.einsum('...id,...jd->...ij', (data_normalizer * data), projection)
 
@@ -149,7 +149,7 @@ def causal_linear_attention_noncuda(q, k, v):
     return out
 
 class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = None, feature_redraw_interval = 0, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, amp_enabled = False):
+    def __init__(self, dim_heads, nb_features = None, feature_redraw_interval = 1000, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, amp_enabled = False):
         super().__init__()
         nb_features = default(nb_features, int(dim_heads * math.log(dim_heads)))
 
@@ -181,7 +181,7 @@ class FastAttention(nn.Module):
 
         # It's time to redraw the projection matrix
         if exists(self.feature_redraw_interval) and self.calls_since_last_redraw >= self.feature_redraw_interval:
-            self.projection_matrix = self.create_projection(device = device).type_as(q)
+            self.projection_matrix = self.create_projection(device = device)
             self.calls_since_last_redraw = torch.tensor(0)
         # Keep track of how many forward passes we do before we redraw again
         else:

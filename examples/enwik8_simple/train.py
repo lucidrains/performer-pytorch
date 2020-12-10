@@ -9,6 +9,7 @@ import torch
 import torch.optim as optim
 from torch.nn import functional as F
 from torch.utils.data import DataLoader, Dataset
+from torch.cuda.amp import autocast, GradScaler
 
 # constants
 
@@ -46,7 +47,8 @@ model = PerformerLM(
     reversible = True,
     nb_features = 256,
     use_scalenorm = True,
-    local_attn_heads = (8, 8, 8, 6, 4, 2)
+    local_attn_heads = (8, 8, 8, 6, 4, 2),
+    amp_enabled = True
 )
 
 model = AutoregressiveWrapper(model)
@@ -81,6 +83,7 @@ val_loader    = cycle(DataLoader(val_dataset, batch_size = BATCH_SIZE))
 # optimizer
 
 optim = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+scaler = GradScaler()
 
 # training
 
@@ -88,12 +91,16 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10., desc='training'):
     model.train()
 
     for __ in range(GRADIENT_ACCUMULATE_EVERY):
-        loss = model(next(train_loader), return_loss = True)
-        loss.backward()
+        with autocast():
+            loss = model(next(train_loader), return_loss = True)
+        scaler.scale(loss).backward()
 
     print(f'training loss: {loss.item()}')
+
+    scaler.unscale_(optim)
     torch.nn.utils.clip_grad_norm_(model.parameters(), 0.5)
-    optim.step()
+    scaler.step(optim)
+    scaler.update()
     optim.zero_grad()
 
     if i % VALIDATE_EVERY == 0:
@@ -102,7 +109,7 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10., desc='training'):
             loss = model(next(val_loader), return_loss = True)
             print(f'validation loss: {loss.item()}')
 
-    if i % GENERATE_EVERY == 0:
+    if i % GENERATE_EVERY == 0 and i != 0:
         model.eval()
         inp = random.choice(val_dataset)[:-1]
         prime = decode_tokens(inp)
