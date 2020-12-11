@@ -60,6 +60,7 @@ class ReversibleBlock(nn.Module):
     def forward(self, x, f_args = {}, g_args = {}):
         x1, x2 = torch.chunk(x, 2, dim=2)
         y1, y2 = None, None
+        f_args['_reverse'] = g_args['_reverse'] = False
 
         with torch.no_grad():
             y1 = x1 + self.f(x2, record_rng=self.training, **f_args)
@@ -73,6 +74,8 @@ class ReversibleBlock(nn.Module):
 
         dy1, dy2 = torch.chunk(dy, 2, dim=2)
         del dy
+
+        f_args['_reverse'] = g_args['_reverse'] = True
 
         with torch.enable_grad():
             y1.requires_grad = True

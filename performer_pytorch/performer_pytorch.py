@@ -41,7 +41,7 @@ def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, ep
 
     ratio = (projection_matrix.shape[0] ** -0.5)
 
-    projection = repeat(projection_matrix, 'j d -> b h j d', b = b, h = h).type_as(data)
+    projection = repeat(projection_matrix, 'j d -> b h j d', b = b, h = h)
 
     data_dash = torch.einsum('...id,...jd->...ij', (data_normalizer * data), projection)
 
@@ -176,16 +176,17 @@ class FastAttention(nn.Module):
                 print('unable to import cuda code for auto-regressive Performer. will default to the memory inefficient non-cuda version')
                 self.causal_linear_fn = causal_linear_attention_noncuda
 
-    def forward(self, q, k, v):
+    def forward(self, q, k, v, can_redraw_projection = True):
         device = q.device
 
-        # It's time to redraw the projection matrix
-        if exists(self.feature_redraw_interval) and self.calls_since_last_redraw >= self.feature_redraw_interval:
-            self.projection_matrix = self.create_projection(device = device)
-            self.calls_since_last_redraw = torch.tensor(0)
-        # Keep track of how many forward passes we do before we redraw again
-        else:
-            self.calls_since_last_redraw += 1
+        if can_redraw_projection:
+            # It's time to redraw the projection matrix
+            if exists(self.feature_redraw_interval) and self.calls_since_last_redraw >= self.feature_redraw_interval:
+                self.projection_matrix.copy_(self.create_projection(device = device))
+                self.calls_since_last_redraw = torch.tensor(0)
+            # Keep track of how many forward passes we do before we redraw again
+            else:
+                self.calls_since_last_redraw += 1
 
         if self.generalized_attention:
             create_kernel = partial(generalized_kernel, kernel_fn = self.kernel_fn, projection_matrix = self.projection_matrix, device = device)
@@ -283,8 +284,9 @@ class SelfAttention(nn.Module):
         self.to_out = nn.Linear(dim, dim)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, context = None, mask = None, context_mask = None):
+    def forward(self, x, context = None, mask = None, context_mask = None, **kwargs):
         b, n, _, h, gh = *x.shape, self.heads, self.global_heads
+        is_reverse = kwargs.pop('_reverse', False)
 
         cross_attend = exists(context)
         context = default(context, x)
@@ -302,7 +304,7 @@ class SelfAttention(nn.Module):
                 global_mask = context_mask[:, None, :, None]
                 k.masked_fill_(~global_mask, 0)
 
-            out = self.fast_attention(q, k, v)
+            out = self.fast_attention(q, k, v, redraw_projection = not is_reverse)
             attn_outs.append(out)
 
         if not empty(lq):
