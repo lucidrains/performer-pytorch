@@ -126,19 +126,15 @@ def linear_attention(q, k, v):
 # efficient causal linear attention, created by EPFL
 # TODO: rewrite EPFL's CUDA kernel to do mixed precision and remove half to float conversion and back
 def causal_linear_attention(q, k, v, amp_enabled = False):
+    q_ = q
     from fast_transformers.causal_product import CausalDotProduct
     is_half = isinstance(q, torch.cuda.HalfTensor) or amp_enabled
 
     if is_half:
         q, k, v = map(lambda t: t.float(), (q, k, v))
-
     D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k.cumsum(dim=-2))
-    out = CausalDotProduct.apply(q, k, v)
+    out = CausalDotProduct.apply(q, k, v).type_as(q_)
     out = torch.einsum('...nd,...n->...nd', out, D_inv)
-
-    if is_half:
-        out = out.half()
-
     return out
 
 # inefficient causal linear attention, without cuda code, for reader's reference
@@ -175,8 +171,11 @@ class FastAttention(nn.Module):
                 print('unable to import cuda code for auto-regressive Performer. will default to the memory inefficient non-cuda version')
                 self.causal_linear_fn = causal_linear_attention_noncuda
 
+    @torch.no_grad()
     def redraw_projection_matrix(self, device):
-        self.projection_matrix.copy_(self.create_projection(device = device))
+        projections = self.create_projection(device = device)
+        self.projection_matrix.copy_(projections)
+        del projections
 
     def forward(self, q, k, v):
         device = q.device
@@ -281,8 +280,9 @@ class SelfAttention(nn.Module):
         b, n, _, h, gh = *x.shape, self.heads, self.global_heads
 
         cross_attend = exists(context)
+
         context = default(context, x)
-        context_mask = default(context_mask, mask)
+        context_mask = default(context_mask, mask) if not cross_attend else context_mask
 
         q, k, v = self.to_q(x), self.to_k(context), self.to_v(context)
 

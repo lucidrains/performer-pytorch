@@ -1,4 +1,5 @@
 import re
+import torch
 from torch import nn
 from performer_pytorch.performer_pytorch import PerformerLM
 from performer_pytorch.autoregressive_wrapper import AutoregressiveWrapper
@@ -60,11 +61,12 @@ class PerformerEncDec(nn.Module):
         dec = PerformerLM(**dec_kwargs)
 
         if tie_token_embeds:
-            enc.token_embed = dec.token_embed
+            enc.token_emb = dec.token_emb
 
         self.enc = enc
         self.dec = AutoregressiveWrapper(dec, ignore_index = ignore_index, pad_value = pad_value)
 
+    @torch.no_grad()
     def generate(self, seq_in, seq_out_start, seq_len, **kwargs):
         enc_kwargs, dec_kwargs, kwargs = extract_and_set_enc_dec_kwargs(kwargs)
         encodings = self.enc(seq_in, return_encodings = True, **enc_kwargs)
@@ -72,5 +74,6 @@ class PerformerEncDec(nn.Module):
 
     def forward(self, seq_in, seq_out, return_loss = False, **kwargs):
         enc_kwargs, dec_kwargs, kwargs = extract_and_set_enc_dec_kwargs(kwargs)
+        dec_kwargs['context_mask'] = enc_kwargs['mask']
         encodings = self.enc(seq_in, return_encodings = True, **enc_kwargs)
         return self.dec(seq_out, context = encodings, return_loss = return_loss, **dec_kwargs)
