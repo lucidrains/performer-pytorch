@@ -42,6 +42,7 @@ def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, ep
     ratio = (projection_matrix.shape[0] ** -0.5)
 
     projection = repeat(projection_matrix, 'j d -> b h j d', b = b, h = h)
+    projection = projection.type_as(data)
 
     data_dash = torch.einsum('...id,...jd->...ij', (data_normalizer * data), projection)
 
@@ -69,6 +70,7 @@ def generalized_kernel(data, *, projection_matrix, kernel_fn = nn.ReLU(), kernel
         return kernel_fn(data_normalizer * data) + kernel_epsilon
 
     projection = repeat(projection_matrix, 'j d -> b h j d', b = b, h = h)
+    projection = projection.type_as(data)
 
     data_dash = torch.einsum('...id,...jd->...ij', (data_normalizer * data), projection)
 
