@@ -28,6 +28,7 @@ model = PerformerLM(
     heads = 8,                      # heads
     causal = False,                 # auto-regressive or not
     nb_features = 256,              # number of random features, if not set, will default to (d * log(d)), where d is the dimension of each head
+    feature_redraw_interval = 1000, # how frequently to redraw the projection matrix, the more frequent, the slower the training
     generalized_attention = False,  # defaults to softmax approximation, but can be set to True for generalized attention
     kernel_fn = nn.ReLU(),          # the kernel function to be used, if generalized attention is turned on, defaults to Relu
     reversible = True,              # reversible layers, from Reformer paper

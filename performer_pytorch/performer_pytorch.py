@@ -149,16 +149,13 @@ def causal_linear_attention_noncuda(q, k, v):
     return out
 
 class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = None, feature_redraw_interval = 1000, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, amp_enabled = False):
+    def __init__(self, dim_heads, nb_features = None, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, amp_enabled = False):
         super().__init__()
         nb_features = default(nb_features, int(dim_heads * math.log(dim_heads)))
 
         self.dim_heads = dim_heads
         self.nb_features = nb_features
         self.ortho_scaling = ortho_scaling
-        
-        self.feature_redraw_interval = feature_redraw_interval
-        self.register_buffer('calls_since_last_redraw', torch.tensor(0)) # Make sure this is persistent
 
         self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = self.nb_features, nb_columns = dim_heads, scaling = ortho_scaling, qr_uniform_q = qr_uniform_q)
         projection_matrix = self.create_projection()
@@ -176,17 +173,11 @@ class FastAttention(nn.Module):
                 print('unable to import cuda code for auto-regressive Performer. will default to the memory inefficient non-cuda version')
                 self.causal_linear_fn = causal_linear_attention_noncuda
 
-    def forward(self, q, k, v, can_redraw_projection = True):
-        device = q.device
+    def redraw_projection_matrix(self, device):
+        self.projection_matrix.copy_(self.create_projection(device = device))
 
-        if can_redraw_projection:
-            # It's time to redraw the projection matrix
-            if exists(self.feature_redraw_interval) and self.calls_since_last_redraw >= self.feature_redraw_interval:
-                self.projection_matrix.copy_(self.create_projection(device = device))
-                self.calls_since_last_redraw = torch.tensor(0)
-            # Keep track of how many forward passes we do before we redraw again
-            else:
-                self.calls_since_last_redraw += 1
+    def forward(self, q, k, v):
+        device = q.device
 
         if self.generalized_attention:
             create_kernel = partial(generalized_kernel, kernel_fn = self.kernel_fn, projection_matrix = self.projection_matrix, device = device)
@@ -272,7 +263,7 @@ class SelfAttention(nn.Module):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
         dim_head = dim // heads
-        self.fast_attention = FastAttention(dim_head, nb_features, feature_redraw_interval, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, amp_enabled = amp_enabled)
+        self.fast_attention = FastAttention(dim_head, nb_features, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, amp_enabled = amp_enabled)
 
         self.heads = heads
         self.global_heads = heads - local_heads
@@ -286,7 +277,6 @@ class SelfAttention(nn.Module):
 
     def forward(self, x, context = None, mask = None, context_mask = None, **kwargs):
         b, n, _, h, gh = *x.shape, self.heads, self.global_heads
-        is_reverse = kwargs.pop('_reverse', False)
 
         cross_attend = exists(context)
         context = default(context, x)
@@ -304,7 +294,7 @@ class SelfAttention(nn.Module):
                 global_mask = context_mask[:, None, :, None]
                 k.masked_fill_(~global_mask, 0)
 
-            out = self.fast_attention(q, k, v, redraw_projection = not is_reverse)
+            out = self.fast_attention(q, k, v)
             attn_outs.append(out)
 
         if not empty(lq):
@@ -318,7 +308,7 @@ class SelfAttention(nn.Module):
         return self.dropout(out)
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0., cross_attend = False, amp_enabled = False):
+    def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0., cross_attend = False, amp_enabled = False):
         super().__init__()
         layers = nn.ModuleList([])
         local_attn_heads = cast_tuple(local_attn_heads)
@@ -355,11 +345,35 @@ class Performer(nn.Module):
         context_route_map = {'context': route_context, 'context_mask': route_context} if cross_attend else {}
         self.net = execute_type(layers, args_route = {**attn_route_map, **context_route_map})
 
+        # keeping track of when to redraw projections for all attention layers
+        self.feature_redraw_interval = feature_redraw_interval
+        self.register_buffer('calls_since_last_redraw', torch.tensor(0))
+
+    def fix_projection_matrices_(self):
+        self.feature_redraw_interval = None
+
+    def check_redraw_projections(self):
+        if not self.training:
+            return
+
+        if exists(self.feature_redraw_interval) and self.calls_since_last_redraw >= self.feature_redraw_interval:
+            device = get_module_device(self)
+
+            fast_attentions = find_modules(self, FastAttention)
+            for fast_attention in fast_attentions:
+                fast_attention.redraw_projection_matrix(device)
+
+            self.calls_since_last_redraw.zero_()
+            return
+
+        self.calls_since_last_redraw += 1
+
     def forward(self, x, **kwargs):
+        self.check_redraw_projections()
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, cross_attend = False, amp_enabled = False):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, cross_attend = False, amp_enabled = False):
         super().__init__()
         local_attn_heads = cast_tuple(local_attn_heads)
 
@@ -371,14 +385,11 @@ class PerformerLM(nn.Module):
         nn.init.normal_(self.token_emb.weight, std = 0.02)
         nn.init.normal_(self.pos_emb.weight, std = 0.02)
 
-        self.performer = Performer(dim, depth, heads, local_attn_heads, local_window_size, causal, ff_mult, nb_features, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, amp_enabled)
+        self.performer = Performer(dim, depth, heads, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, amp_enabled)
         self.norm = nn.LayerNorm(dim)
 
     def fix_projection_matrices_(self):
-        fast_attentions = find_modules(self, FastAttention)
-        device = get_module_device(self)
-        for fast_attention in fast_attentions:
-            fast_attention.feature_redraw_interval = None
+        self.performer.fix_projection_matrices_()
 
     def forward(self, x, return_encodings = False, **kwargs):
         b, n, device = *x.shape, x.device
