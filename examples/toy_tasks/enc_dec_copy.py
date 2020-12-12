@@ -42,7 +42,8 @@ model = PerformerEncDec(
     dec_max_seq_len=DEC_SEQ_LEN,
     dec_reversible=True,
     dec_feature_redraw_interval=1000,
-    dec_nb_features=64
+    dec_nb_features=64,
+    amp_enabled = True
 ).cuda()
 
 # optimizer
