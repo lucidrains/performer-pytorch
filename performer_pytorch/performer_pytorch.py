@@ -4,7 +4,9 @@ import torch.nn.functional as F
 from torch import nn
 from torch.cuda.amp import autocast
 from einops import rearrange, repeat
+
 from functools import partial
+from contextlib import contextmanager
 
 from local_attention import LocalAttention
 from performer_pytorch.reversible import ReversibleSequence, SequentialSequence
@@ -19,6 +21,10 @@ def empty(tensor):
 
 def default(val, d):
     return val if exists(val) else d
+
+@contextmanager
+def null_context():
+    yield
 
 def cast_tuple(val):
     return (val,) if not isinstance(val, tuple) else val
@@ -129,11 +135,15 @@ def causal_linear_attention(q, k, v, amp_enabled = False):
     q_ = q
     from fast_transformers.causal_product import CausalDotProduct
     is_half = isinstance(q, torch.cuda.HalfTensor) or amp_enabled
+    cuda_context = null_context if not amp_enabled else partial(autocast, enabled = False)
 
-    if is_half:
-        q, k, v = map(lambda t: t.float(), (q, k, v))
     D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k.cumsum(dim=-2))
-    out = CausalDotProduct.apply(q, k, v).type_as(q_)
+
+    with cuda_context():
+        if is_half:
+            q, k, v = map(lambda t: t.float(), (q, k, v))
+        out = CausalDotProduct.apply(q, k, v)
+
     out = torch.einsum('...nd,...n->...nd', out, D_inv)
     return out
 

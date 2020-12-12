@@ -2,6 +2,7 @@ import tqdm
 import torch
 import torch.optim as optim
 from performer_pytorch import PerformerEncDec
+from torch.cuda.amp import autocast, GradScaler
 
 # constants
 
@@ -47,6 +48,7 @@ model = PerformerEncDec(
 # optimizer
 
 optim = torch.optim.Adam(model.parameters(), lr=LEARNING_RATE)
+scaler = GradScaler()
 
 # training
 
@@ -55,11 +57,14 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10., desc='training'):
 
     src, tgt, src_mask, tgt_mask = next(cycle())
 
-    loss = model(src, tgt, enc_mask=src_mask, dec_mask=tgt_mask)
-    loss.backward()
+    with autocast():
+        loss = model(src, tgt, enc_mask=src_mask, dec_mask=tgt_mask)
+
+    scaler.scale(loss).backward()
     print(f'{i}: {loss.item()}')
 
-    optim.step()
+    scaler.step(optim)
+    scaler.update()
     optim.zero_grad()
 
     if i != 0 and i % GENERATE_EVERY == 0:
