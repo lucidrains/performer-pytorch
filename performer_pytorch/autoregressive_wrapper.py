@@ -82,14 +82,7 @@ class AutoregressiveWrapper(nn.Module):
         self.net.train(was_training)
         return out
 
-    def forward(self, x, return_loss = False, **kwargs):
-        pad = partial(pad_sequence, batch_first = True, padding_value = self.pad_value)
-
-        if not return_loss:
-            if not isinstance(x, torch.Tensor):
-                x = pad(x)
-            return self.net(x, **kwargs)
-
+    def forward(self, x, **kwargs):
         xi = x[:, :-1]
         xo = x[:, 1:]
 

@@ -44,6 +44,7 @@ class PerformerEncDec(nn.Module):
         ignore_index = 0,
         pad_value = 0,
         tie_token_embeds = False,
+        no_projection = False,
         amp_enabled = False,
         **kwargs
     ):
@@ -53,6 +54,8 @@ class PerformerEncDec(nn.Module):
         assert 'dim' not in dec_kwargs and 'dim' not in enc_kwargs, 'you must set the dim for both encoder and decoder'
 
         enc_kwargs['dim'] = dec_kwargs['dim'] = dim
+        enc_kwargs['no_projection'] = dec_kwargs['no_projection'] = no_projection
+
         dec_kwargs['amp_enabled'] = amp_enabled
         dec_kwargs['causal'] = True
         dec_kwargs['cross_attend'] = True
@@ -72,8 +75,7 @@ class PerformerEncDec(nn.Module):
         encodings = self.enc(seq_in, return_encodings = True, **enc_kwargs)
         return self.dec.generate(seq_out_start, seq_len, context = encodings, **{**dec_kwargs, **kwargs})
 
-    def forward(self, seq_in, seq_out, return_loss = False, **kwargs):
+    def forward(self, seq_in, seq_out, enc_mask = None, **kwargs):
         enc_kwargs, dec_kwargs, kwargs = extract_and_set_enc_dec_kwargs(kwargs)
-        dec_kwargs['context_mask'] = enc_kwargs['mask']
-        encodings = self.enc(seq_in, return_encodings = True, **enc_kwargs)
-        return self.dec(seq_out, context = encodings, return_loss = return_loss, **dec_kwargs)
+        encodings = self.enc(seq_in, mask = enc_mask, return_encodings = True, **enc_kwargs)
+        return self.dec(seq_out, context = encodings, context_mask = enc_mask, **dec_kwargs)

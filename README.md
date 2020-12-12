@@ -97,7 +97,7 @@ tgt_mask = torch.ones_like(src).bool()
 
 # train
 enc_dec.train()
-loss = enc_dec(src, tgt, enc_mask = src_mask, dec_mask = tgt_mask, return_loss = True)
+loss = enc_dec(src, tgt, enc_mask = src_mask, dec_mask = tgt_mask)
 loss.backward()
 
 # generate

@@ -147,7 +147,7 @@ def causal_linear_attention_noncuda(q, k, v):
     return out
 
 class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = None, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, amp_enabled = False):
+    def __init__(self, dim_heads, nb_features = None, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, amp_enabled = False, use_softmax_kernel = False, no_projection = False):
         super().__init__()
         nb_features = default(nb_features, int(dim_heads * math.log(dim_heads)))
 
@@ -161,6 +161,10 @@ class FastAttention(nn.Module):
 
         self.generalized_attention = generalized_attention
         self.kernel_fn = kernel_fn
+
+        # if this is turned on, no projection will be used
+        # queries and keys will be softmax-ed as in the original efficient attention paper
+        self.no_projection = no_projection
 
         self.causal = causal
         if causal:
@@ -180,9 +184,14 @@ class FastAttention(nn.Module):
     def forward(self, q, k, v):
         device = q.device
 
-        if self.generalized_attention:
+        if self.no_projection:
+            q = q.softmax(dim = -1)
+            k = torch.exp(k) if self.causal else k.softmax(dim = -2)
+
+        elif self.generalized_attention:
             create_kernel = partial(generalized_kernel, kernel_fn = self.kernel_fn, projection_matrix = self.projection_matrix, device = device)
             q, k = map(create_kernel, (q, k))
+
         else:
             create_kernel = partial(softmax_kernel, projection_matrix = self.projection_matrix, device = device)
             q = create_kernel(q, is_query = True)
@@ -260,20 +269,21 @@ class FeedForward(nn.Module):
         return x
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, causal = False, heads = 8, local_heads = 0, local_window_size = 256, nb_features = None, feature_redraw_interval = 1000, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0., amp_enabled = False):
+    def __init__(self, dim, causal = False, heads = 8, dim_head = 64, local_heads = 0, local_window_size = 256, nb_features = None, feature_redraw_interval = 1000, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0., amp_enabled = False, no_projection = False):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
-        dim_head = dim // heads
-        self.fast_attention = FastAttention(dim_head, nb_features, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, amp_enabled = amp_enabled)
+        dim_head = default(dim_head, dim // heads)
+        inner_dim = dim_head * heads
+        self.fast_attention = FastAttention(dim_head, nb_features, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, amp_enabled = amp_enabled, no_projection = no_projection)
 
         self.heads = heads
         self.global_heads = heads - local_heads
         self.local_attn = LocalAttention(window_size = local_window_size, causal = causal, autopad = True, dropout = dropout, look_forward = int(not causal), rel_pos_emb_config = (dim_head, local_heads)) if local_heads > 0 else None
 
-        self.to_q = nn.Linear(dim, dim)
-        self.to_k = nn.Linear(dim, dim)
-        self.to_v = nn.Linear(dim, dim)
-        self.to_out = nn.Linear(dim, dim)
+        self.to_q = nn.Linear(dim, inner_dim)
+        self.to_k = nn.Linear(dim, inner_dim)
+        self.to_v = nn.Linear(dim, inner_dim)
+        self.to_out = nn.Linear(inner_dim, dim)
         self.dropout = nn.Dropout(dropout)
 
     def forward(self, x, context = None, mask = None, context_mask = None, **kwargs):
@@ -294,13 +304,13 @@ class SelfAttention(nn.Module):
         if not empty(q):
             if exists(context_mask):
                 global_mask = context_mask[:, None, :, None]
-                k.masked_fill_(~global_mask, 0)
+                v.masked_fill_(~global_mask, 0.)
 
             out = self.fast_attention(q, k, v)
             attn_outs.append(out)
 
         if not empty(lq):
-            assert 'local attention is not compatible with cross attention'
+            assert not cross_attend, 'local attention is not compatible with cross attention'
             out = self.local_attn(lq, lk, lv, input_mask = mask)
             attn_outs.append(out)
 
@@ -310,7 +320,7 @@ class SelfAttention(nn.Module):
         return self.dropout(out)
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0., cross_attend = False, amp_enabled = False):
+    def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0., cross_attend = False, amp_enabled = False, no_projection = False):
         super().__init__()
         layers = nn.ModuleList([])
         local_attn_heads = cast_tuple(local_attn_heads)
@@ -327,7 +337,7 @@ class Performer(nn.Module):
 
         for _, local_heads in zip(range(depth), local_attn_heads):
             layers.append(nn.ModuleList([
-                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, amp_enabled = amp_enabled)),
+                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, amp_enabled = amp_enabled, no_projection = no_projection)),
                 wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
             ]))
 
@@ -335,7 +345,7 @@ class Performer(nn.Module):
                 continue
 
             layers.append(nn.ModuleList([
-                wrapper_fn(SelfAttention(dim, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout)),
+                wrapper_fn(SelfAttention(dim, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)),
                 wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
             ]))
 
@@ -375,7 +385,7 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, cross_attend = False, amp_enabled = False):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, cross_attend = False, amp_enabled = False, no_projection = False, tie_embed = False):
         super().__init__()
         local_attn_heads = cast_tuple(local_attn_heads)
 
@@ -384,11 +394,9 @@ class PerformerLM(nn.Module):
         self.pos_emb = nn.Embedding(max_seq_len, dim)
         self.dropout = nn.Dropout(emb_dropout)
 
-        nn.init.normal_(self.token_emb.weight, std = 0.02)
-        nn.init.normal_(self.pos_emb.weight, std = 0.02)
-
-        self.performer = Performer(dim, depth, heads, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, amp_enabled)
+        self.performer = Performer(dim, depth, heads, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, amp_enabled, no_projection)
         self.norm = nn.LayerNorm(dim)
+        self.to_out = nn.Linear(dim, num_tokens) if not tie_embed else None
 
     def fix_projection_matrices_(self):
         self.performer.fix_projection_matrices_()
@@ -410,5 +418,8 @@ class PerformerLM(nn.Module):
 
         if return_encodings:
             return x
+
+        if exists(self.to_out):
+            return self.to_out(x)
 
         return x @ self.token_emb.weight.t()

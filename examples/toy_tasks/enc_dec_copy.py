@@ -7,7 +7,7 @@ from performer_pytorch import PerformerEncDec
 
 NUM_BATCHES = int(1e5)
 BATCH_SIZE = 32
-LEARNING_RATE = 3e-4
+LEARNING_RATE = 1e-4
 GENERATE_EVERY  = 100
 NUM_TOKENS = 16 + 2
 ENC_SEQ_LEN = 32
@@ -28,19 +28,20 @@ def cycle():
 
 model = PerformerEncDec(
     dim=512,
-    tie_token_embeds=True,
     enc_num_tokens=NUM_TOKENS,
-    enc_depth=3,
+    enc_depth=1,
     enc_heads=8,
     enc_max_seq_len=ENC_SEQ_LEN,
     enc_reversible=True,
-    enc_feature_redraw_interval=10,
+    enc_feature_redraw_interval=1000,
+    enc_nb_features = 64,
     dec_num_tokens=NUM_TOKENS,
     dec_depth=3,
     dec_heads=8,
     dec_max_seq_len=DEC_SEQ_LEN,
     dec_reversible=True,
-    dec_feature_redraw_interval=10
+    dec_feature_redraw_interval=1000,
+    dec_nb_features=64
 ).cuda()
 
 # optimizer
@@ -54,7 +55,7 @@ for i in tqdm.tqdm(range(NUM_BATCHES), mininterval=10., desc='training'):
 
     src, tgt, src_mask, tgt_mask = next(cycle())
 
-    loss = model(src, tgt, enc_mask=src_mask, dec_mask=tgt_mask, return_loss=True)
+    loss = model(src, tgt, enc_mask=src_mask, dec_mask=tgt_mask)
     loss.backward()
     print(f'{i}: {loss.item()}')
 
