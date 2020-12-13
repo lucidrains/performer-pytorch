@@ -45,7 +45,6 @@ class PerformerEncDec(nn.Module):
         pad_value = 0,
         tie_token_embeds = False,
         no_projection = False,
-        amp_enabled = False,
         **kwargs
     ):
         super().__init__()
@@ -56,7 +55,6 @@ class PerformerEncDec(nn.Module):
         enc_kwargs['dim'] = dec_kwargs['dim'] = dim
         enc_kwargs['no_projection'] = dec_kwargs['no_projection'] = no_projection
 
-        dec_kwargs['amp_enabled'] = amp_enabled
         dec_kwargs['causal'] = True
         dec_kwargs['cross_attend'] = True
 

@@ -131,11 +131,11 @@ def linear_attention(q, k, v):
 
 # efficient causal linear attention, created by EPFL
 # TODO: rewrite EPFL's CUDA kernel to do mixed precision and remove half to float conversion and back
-def causal_linear_attention(q, k, v, amp_enabled = False):
+def causal_linear_attention(q, k, v):
     q_ = q
     from fast_transformers.causal_product import CausalDotProduct
-    is_half = isinstance(q, torch.cuda.HalfTensor) or amp_enabled
-    cuda_context = null_context if not amp_enabled else partial(autocast, enabled = False)
+    is_half = isinstance(q, torch.cuda.HalfTensor) or torch.is_autocast_enabled()
+    cuda_context = null_context if not torch.is_autocast_enabled() else partial(autocast, enabled = False)
 
     D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k.cumsum(dim=-2))
 
@@ -157,7 +157,7 @@ def causal_linear_attention_noncuda(q, k, v):
     return out
 
 class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = None, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, amp_enabled = False, use_softmax_kernel = False, no_projection = False):
+    def __init__(self, dim_heads, nb_features = None, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_softmax_kernel = False, no_projection = False):
         super().__init__()
         nb_features = default(nb_features, int(dim_heads * math.log(dim_heads)))
 
@@ -180,7 +180,7 @@ class FastAttention(nn.Module):
         if causal:
             try:
                 import fast_transformers.causal_product.causal_product_cuda
-                self.causal_linear_fn = partial(causal_linear_attention, amp_enabled = amp_enabled)
+                self.causal_linear_fn = partial(causal_linear_attention)
             except ImportError:
                 print('unable to import cuda code for auto-regressive Performer. will default to the memory inefficient non-cuda version')
                 self.causal_linear_fn = causal_linear_attention_noncuda
@@ -279,12 +279,12 @@ class FeedForward(nn.Module):
         return x
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, causal = False, heads = 8, dim_head = 64, local_heads = 0, local_window_size = 256, nb_features = None, feature_redraw_interval = 1000, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0., amp_enabled = False, no_projection = False):
+    def __init__(self, dim, causal = False, heads = 8, dim_head = 64, local_heads = 0, local_window_size = 256, nb_features = None, feature_redraw_interval = 1000, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0., no_projection = False):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
         dim_head = default(dim_head, dim // heads)
         inner_dim = dim_head * heads
-        self.fast_attention = FastAttention(dim_head, nb_features, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, amp_enabled = amp_enabled, no_projection = no_projection)
+        self.fast_attention = FastAttention(dim_head, nb_features, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, no_projection = no_projection)
 
         self.heads = heads
         self.global_heads = heads - local_heads
@@ -330,7 +330,7 @@ class SelfAttention(nn.Module):
         return self.dropout(out)
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0., cross_attend = False, amp_enabled = False, no_projection = False):
+    def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0., cross_attend = False, no_projection = False):
         super().__init__()
         layers = nn.ModuleList([])
         local_attn_heads = cast_tuple(local_attn_heads)
@@ -347,7 +347,7 @@ class Performer(nn.Module):
 
         for _, local_heads in zip(range(depth), local_attn_heads):
             layers.append(nn.ModuleList([
-                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, amp_enabled = amp_enabled, no_projection = no_projection)),
+                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)),
                 wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
             ]))
 
@@ -395,7 +395,7 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, cross_attend = False, amp_enabled = False, no_projection = False, tie_embed = False):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, cross_attend = False, no_projection = False, tie_embed = False):
         super().__init__()
         local_attn_heads = cast_tuple(local_attn_heads)
 
@@ -404,7 +404,7 @@ class PerformerLM(nn.Module):
         self.pos_emb = nn.Embedding(max_seq_len, dim)
         self.dropout = nn.Dropout(emb_dropout)
 
-        self.performer = Performer(dim, depth, heads, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, amp_enabled, no_projection)
+        self.performer = Performer(dim, depth, heads, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, no_projection)
         self.norm = nn.LayerNorm(dim)
         self.to_out = nn.Linear(dim, num_tokens) if not tie_embed else None
 
