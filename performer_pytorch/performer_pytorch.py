@@ -65,7 +65,7 @@ def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, ep
         data_dash = ratio * (
             torch.exp(data_dash - diag_data - torch.max(data_dash)) + eps)
 
-    return data_dash
+    return data_dash.type_as(data)
 
 def generalized_kernel(data, *, projection_matrix, kernel_fn = nn.ReLU(), kernel_epsilon = 0.001, normalize_data = True, device = None):
     b, h, *_ = data.shape
@@ -81,7 +81,7 @@ def generalized_kernel(data, *, projection_matrix, kernel_fn = nn.ReLU(), kernel
     data_dash = torch.einsum('...id,...jd->...ij', (data_normalizer * data), projection)
 
     data_prime = kernel_fn(data_dash) + kernel_epsilon
-    return data_prime
+    return data_prime.type_as(data)
 
 def orthogonal_matrix_chunk(cols, qr_uniform_q = False, device = None):
     unstructured_block = torch.randn((cols, cols), device = device)
@@ -124,7 +124,8 @@ def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, qr_unifo
 
 # non-causal linear attention
 def linear_attention(q, k, v):
-    D_inv = 1. / torch.einsum('...nd,...d->...n', q, k.sum(dim = -2))
+    k_cumsum = k.sum(dim = -2)
+    D_inv = 1. / torch.einsum('...nd,...d->...n', q, k_cumsum.type_as(q))
     context = torch.einsum('...nd,...ne->...de', k, v)
     out = torch.einsum('...de,...nd,...n->...ne', context, q, D_inv)
     return out
@@ -137,7 +138,8 @@ def causal_linear_attention(q, k, v):
     is_half = isinstance(q, torch.cuda.HalfTensor)
     cuda_context = null_context if not autocast_enabled else partial(autocast, enabled = False)
 
-    D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k.cumsum(dim=-2))
+    k_cumsum = k.cumsum(dim=-2)
+    D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q))
 
     with cuda_context():
         if is_half or autocast_enabled:
@@ -154,14 +156,15 @@ def causal_linear_attention(q, k, v):
 # inefficient causal linear attention, without cuda code, for reader's reference
 # not being used
 def causal_linear_attention_noncuda(q, k, v):
-    D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k.cumsum(dim=-2))
+    k_cumsum = k.cumsum(dim=-2)
+    D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q))
     context = torch.einsum('...nd,...ne->...nde', k, v)
     context = context.cumsum(dim=-3)
     out = torch.einsum('...nde,...nd,...n->...ne', context, q, D_inv)
     return out
 
 class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = None, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_softmax_kernel = False, no_projection = False):
+    def __init__(self, dim_heads, nb_features = None, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, no_projection = False):
         super().__init__()
         nb_features = default(nb_features, int(dim_heads * math.log(dim_heads)))
 
