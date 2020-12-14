@@ -11,6 +11,12 @@ from contextlib import contextmanager
 from local_attention import LocalAttention
 from performer_pytorch.reversible import ReversibleSequence, SequentialSequence
 
+try:
+    from apex import amp
+    APEX_AVAILABLE = True
+except:
+    APEX_AVAILABLE = False
+
 # helpers
 
 def exists(val):
@@ -136,19 +142,19 @@ def causal_linear_attention(q, k, v):
     from fast_transformers.causal_product import CausalDotProduct
     autocast_enabled = torch.is_autocast_enabled()
     is_half = isinstance(q, torch.cuda.HalfTensor)
+    assert not is_half or APEX_AVAILABLE, 'half tensors can only be used if nvidia apex is available'
     cuda_context = null_context if not autocast_enabled else partial(autocast, enabled = False)
+
+    causal_dot_product_fn = amp.float_function(CausalDotProduct.apply) if is_half else CausalDotProduct.apply
 
     k_cumsum = k.cumsum(dim=-2)
     D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q))
 
     with cuda_context():
-        if is_half or autocast_enabled:
+        if autocast_enabled:
             q, k, v = map(lambda t: t.float(), (q, k, v))
 
-        out = CausalDotProduct.apply(q, k, v)
-
-        if is_half:
-            out = out.half()
+        out = causal_dot_product_fn(q, k, v)
 
     out = torch.einsum('...nd,...n->...nd', out, D_inv)
     return out
