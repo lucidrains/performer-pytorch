@@ -20,6 +20,7 @@ setup(
     'local-attention>=1.1.1',
     'pytorch-fast-transformers>=0.3.0',
     'torch>=1.6',
+    'axial-positional-embedding>=0.1.0'
   ],
   classifiers=[
     'Development Status :: 4 - Beta',

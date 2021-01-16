@@ -9,6 +9,7 @@ from functools import partial
 from contextlib import contextmanager
 
 from local_attention import LocalAttention
+from axial_positional_embedding import AxialPositionalEmbedding
 from performer_pytorch.reversible import ReversibleSequence, SequentialSequence
 
 try:
@@ -342,6 +343,27 @@ class SelfAttention(nn.Module):
         out =  self.to_out(out)
         return self.dropout(out)
 
+class AbsolutePositionalEmbedding(nn.Module):
+    def __init__(self, dim, max_seq_len):
+        super().__init__()
+        self.emb = nn.Embedding(max_seq_len, dim)
+
+    def forward(self, x):
+        t = torch.arange(x.shape[1], device=x.device)
+        return self.emb(t)
+
+class FixedPositionalEmbedding(nn.Module):
+    def __init__(self, dim, max_seq_len):
+        super().__init__()
+        inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float() / dim))
+        position = torch.arange(0, max_seq_len, dtype=torch.float)
+        sinusoid_inp = torch.einsum("i,j->ij", position, inv_freq)
+        emb = torch.cat((sinusoid_inp.sin(), sinusoid_inp.cos()), dim=-1)
+        self.register_buffer('emb', emb)
+
+    def forward(self, x):
+        return self.emb[None, :x.shape[1], :].to(x.device)
+
 class Performer(nn.Module):
     def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0., cross_attend = False, no_projection = False):
         super().__init__()
@@ -408,13 +430,21 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, cross_attend = False, no_projection = False, tie_embed = False):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, cross_attend = False, no_projection = False, tie_embed = False, fixed_position_emb = False, axial_position_emb = False, axial_position_shape = None):
         super().__init__()
         local_attn_heads = cast_tuple(local_attn_heads)
 
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(num_tokens, dim)
-        self.pos_emb = nn.Embedding(max_seq_len, dim)
+
+        if fixed_position_emb:
+            self.pos_emb = FixedPositionalEmbedding(dim, max_seq_len)
+        elif axial_position_emb:
+            axial_position_shape = default(axial_position_shape, (math.ceil(max_seq_len / 64), 64))
+            self.pos_emb = AxialPositionalEmbedding(dim, axial_position_shape)
+        else:
+            self.pos_emb = AbsolutePositionalEmbedding(dim, max_seq_len)
+
         self.dropout = nn.Dropout(emb_dropout)
 
         self.performer = Performer(dim, depth, heads, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, no_projection)
@@ -430,7 +460,7 @@ class PerformerLM(nn.Module):
 
         # token and positional embeddings
         x = self.token_emb(x)
-        x += self.pos_emb(torch.arange(n, device = device))
+        x += self.pos_emb(x)
         x = self.dropout(x)
 
         # performer layers
