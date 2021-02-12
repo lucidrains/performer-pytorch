@@ -2,7 +2,6 @@ import math
 import torch
 import torch.nn.functional as F
 from torch import nn
-from torch.cuda.amp import autocast
 from einops import rearrange, repeat
 
 from functools import partial
@@ -11,6 +10,11 @@ from contextlib import contextmanager
 from local_attention import LocalAttention
 from axial_positional_embedding import AxialPositionalEmbedding
 from performer_pytorch.reversible import ReversibleSequence, SequentialSequence
+
+try:
+    from torch.cuda.amp import autocast
+except:
+    pass
 
 try:
     from apex import amp
