@@ -19,7 +19,7 @@ setup(
     'einops>=0.3',
     'local-attention>=1.1.1',
     'pytorch-fast-transformers>=0.3.0',
-    'torch>=1.6',
+    'torch>=1.4',
     'axial-positional-embedding>=0.1.0'
   ],
   classifiers=[
