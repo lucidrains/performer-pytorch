@@ -162,13 +162,24 @@ def causal_linear_attention(q, k, v):
 
 # inefficient causal linear attention, without cuda code, for reader's reference
 # not being used
-def causal_linear_attention_noncuda(q, k, v):
-    k_cumsum = k.cumsum(dim=-2)
-    D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q))
-    context = torch.einsum('...nd,...ne->...nde', k, v)
-    context = context.cumsum(dim=-3)
-    out = torch.einsum('...nde,...nd,...n->...ne', context, q, D_inv)
-    return out
+def causal_linear_attention_noncuda(q, k, v, chunk_size = 128):
+    last_k_cumsum = 0
+    last_context_cumsum = 0
+    outs = []
+
+    for q, k, v in zip(*map(lambda t: t.chunk(chunk_size, dim = -2), (q, k, v))):
+        k_cumsum = last_k_cumsum + k.cumsum(dim=-2)
+
+        D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q))
+        context = torch.einsum('...nd,...ne->...nde', k, v)
+        context_cumsum = last_context_cumsum + context.cumsum(dim=-3)
+        out = torch.einsum('...nde,...nd,...n->...ne', context_cumsum, q, D_inv)
+
+        last_k_cumsum = k_cumsum[:, :, -1:]
+        last_context_cumsum = context_cumsum[:, :, -1:]
+        outs.append(out)
+
+    return torch.cat(outs, dim = -2)
 
 class FastAttention(nn.Module):
     def __init__(self, dim_heads, nb_features = None, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, no_projection = False):
