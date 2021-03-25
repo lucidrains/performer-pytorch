@@ -26,6 +26,9 @@ def exists(val):
 def empty(tensor):
     return tensor.numel() == 0
 
+def always(val):
+    return lambda *args: val
+
 def default(val, d):
     return val if exists(val) else d
 
@@ -90,30 +93,24 @@ def generalized_kernel(data, *, projection_matrix, kernel_fn = nn.ReLU(), kernel
     data_prime = kernel_fn(data_dash) + kernel_epsilon
     return data_prime.type_as(data)
 
-def orthogonal_matrix_chunk(cols, qr_uniform_q = False, device = None):
+def orthogonal_matrix_chunk(cols, device = None):
     unstructured_block = torch.randn((cols, cols), device = device)
     q, r = torch.qr(unstructured_block.cpu(), some = True)
     q, r = map(lambda t: t.to(device), (q, r))
-
-    # proposed by @Parskatt
-    # to make sure Q is uniform https://arxiv.org/pdf/math-ph/0609050.pdf
-    if qr_uniform_q:
-        d = torch.diag(r, 0)
-        q *= d.sign()
     return q.t()
 
-def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, qr_uniform_q = False, device = None):
+def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device = None):
     nb_full_blocks = int(nb_rows / nb_columns)
 
     block_list = []
 
     for _ in range(nb_full_blocks):
-        q = orthogonal_matrix_chunk(nb_columns, qr_uniform_q = qr_uniform_q, device = device)
+        q = orthogonal_matrix_chunk(nb_columns, device = device)
         block_list.append(q)
 
     remaining_rows = nb_rows - nb_full_blocks * nb_columns
     if remaining_rows > 0:
-        q = orthogonal_matrix_chunk(nb_columns, qr_uniform_q = qr_uniform_q, device = device)
+        q = orthogonal_matrix_chunk(nb_columns, device = device)
         block_list.append(q[:remaining_rows])
 
     final_matrix = torch.cat(block_list)
@@ -182,7 +179,7 @@ def causal_linear_attention_noncuda(q, k, v, chunk_size = 128):
     return torch.cat(outs, dim = -2)
 
 class FastAttention(nn.Module):
-    def __init__(self, dim_heads, nb_features = None, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, no_projection = False):
+    def __init__(self, dim_heads, nb_features = None, ortho_scaling = 0, causal = False, generalized_attention = False, kernel_fn = nn.ReLU(), no_projection = False):
         super().__init__()
         nb_features = default(nb_features, int(dim_heads * math.log(dim_heads)))
 
@@ -190,7 +187,7 @@ class FastAttention(nn.Module):
         self.nb_features = nb_features
         self.ortho_scaling = ortho_scaling
 
-        self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = self.nb_features, nb_columns = dim_heads, scaling = ortho_scaling, qr_uniform_q = qr_uniform_q)
+        self.create_projection = partial(gaussian_orthogonal_random_matrix, nb_rows = self.nb_features, nb_columns = dim_heads, scaling = ortho_scaling)
         projection_matrix = self.create_projection()
         self.register_buffer('projection_matrix', projection_matrix)
 
@@ -304,12 +301,12 @@ class FeedForward(nn.Module):
         return x
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, causal = False, heads = 8, dim_head = 64, local_heads = 0, local_window_size = 256, nb_features = None, feature_redraw_interval = 1000, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, dropout = 0., no_projection = False):
+    def __init__(self, dim, causal = False, heads = 8, dim_head = 64, local_heads = 0, local_window_size = 256, nb_features = None, feature_redraw_interval = 1000, generalized_attention = False, kernel_fn = nn.ReLU(), dropout = 0., no_projection = False):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
         dim_head = default(dim_head, dim // heads)
         inner_dim = dim_head * heads
-        self.fast_attention = FastAttention(dim_head, nb_features, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, no_projection = no_projection)
+        self.fast_attention = FastAttention(dim_head, nb_features, causal = causal, generalized_attention = generalized_attention, kernel_fn = kernel_fn, no_projection = no_projection)
 
         self.heads = heads
         self.global_heads = heads - local_heads
@@ -321,7 +318,7 @@ class SelfAttention(nn.Module):
         self.to_out = nn.Linear(inner_dim, dim)
         self.dropout = nn.Dropout(dropout)
 
-    def forward(self, x, context = None, mask = None, context_mask = None, **kwargs):
+    def forward(self, x, pos_emb = None, context = None, mask = None, context_mask = None, **kwargs):
         b, n, _, h, gh = *x.shape, self.heads, self.global_heads
 
         cross_attend = exists(context)
@@ -333,6 +330,9 @@ class SelfAttention(nn.Module):
 
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
         (q, lq), (k, lk), (v, lv) = map(lambda t: (t[:, :gh], t[:, gh:]), (q, k, v))
+
+        if exists(pos_emb) and not cross_attend:
+            q, k, = apply_rotory_pos_emb(q, k, pos_emb)
 
         attn_outs = []
 
@@ -354,6 +354,8 @@ class SelfAttention(nn.Module):
         out =  self.to_out(out)
         return self.dropout(out)
 
+# positional embeddings
+
 class AbsolutePositionalEmbedding(nn.Module):
     def __init__(self, dim, max_seq_len):
         super().__init__()
@@ -363,20 +365,45 @@ class AbsolutePositionalEmbedding(nn.Module):
         t = torch.arange(x.shape[1], device=x.device)
         return self.emb(t)
 
+# rotary positional embedding helpers
+
+def rotate_every_two(x):
+    x = rearrange(x, '... (d j) -> ... d j', j = 2)
+    x1, x2 = x.unbind(dim = -1)
+    x = torch.stack((-x2, x1), dim = -1)
+    return rearrange(x, '... d j -> ... (d j)')
+
+def apply_rotory_pos_emb(q, k, sinu_pos):
+    sinu_pos = rearrange(sinu_pos, '() n (j d) -> n j d', j = 2)
+    sin, cos = sinu_pos.unbind(dim = -2)
+    sin, cos = map(lambda t: repeat(t, 'b n -> b (n j)', j = 2), (sin, cos))
+
+    q_rotated = rotate_every_two(q)
+    k_rotated = rotate_every_two(k)
+
+    q = (q * cos) + (q_rotated * sin)
+    k = (k * cos) + (k_rotated * sin)
+    return q, k
+
+# sinusoidal positional embeddings
+
 class FixedPositionalEmbedding(nn.Module):
     def __init__(self, dim, max_seq_len):
         super().__init__()
         inv_freq = 1. / (10000 ** (torch.arange(0, dim, 2).float() / dim))
         position = torch.arange(0, max_seq_len, dtype=torch.float)
         sinusoid_inp = torch.einsum("i,j->ij", position, inv_freq)
-        emb = torch.cat((sinusoid_inp.sin(), sinusoid_inp.cos()), dim=-1)
+        emb = torch.stack((sinusoid_inp.sin(), sinusoid_inp.cos()), dim=-1)
+        emb = rearrange(emb, 'b d j -> b (d j)')
         self.register_buffer('emb', emb)
 
     def forward(self, x):
         return self.emb[None, :x.shape[1], :].to(x.device)
 
+# performer
+
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0., cross_attend = False, no_projection = False, auto_check_redraw = True):
+    def __init__(self, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0., cross_attend = False, no_projection = False, auto_check_redraw = True):
         super().__init__()
         layers = nn.ModuleList([])
         local_attn_heads = cast_tuple(local_attn_heads)
@@ -393,7 +420,7 @@ class Performer(nn.Module):
 
         for _, local_heads in zip(range(depth), local_attn_heads):
             layers.append(nn.ModuleList([
-                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)),
+                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, dropout = attn_dropout, no_projection = no_projection)),
                 wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
             ]))
 
@@ -401,7 +428,7 @@ class Performer(nn.Module):
                 continue
 
             layers.append(nn.ModuleList([
-                wrapper_fn(SelfAttention(dim, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, qr_uniform_q = qr_uniform_q, dropout = attn_dropout, no_projection = no_projection)),
+                wrapper_fn(SelfAttention(dim, heads = heads, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, dropout = attn_dropout, no_projection = no_projection)),
                 wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
             ]))
 
@@ -409,7 +436,7 @@ class Performer(nn.Module):
 
         route_attn = ((True, False),) * depth * (2 if cross_attend else 1)
         route_context = ((False, False), (True, False)) * depth
-        attn_route_map = {'mask': route_attn}
+        attn_route_map = {'mask': route_attn, 'pos_emb': route_attn}
         context_route_map = {'context': route_context, 'context_mask': route_context} if cross_attend else {}
         self.net = execute_type(layers, args_route = {**attn_route_map, **context_route_map})
 
@@ -443,24 +470,27 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), qr_uniform_q = False, use_scalenorm = False, use_rezero = False, cross_attend = False, no_projection = False, tie_embed = False, fixed_position_emb = False, axial_position_emb = False, axial_position_shape = None, auto_check_redraw = True):
+    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, dim_head = 64, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), use_scalenorm = False, use_rezero = False, cross_attend = False, no_projection = False, tie_embed = False, rotary_position_emb = True, axial_position_emb = False, axial_position_shape = None, auto_check_redraw = True):
         super().__init__()
         local_attn_heads = cast_tuple(local_attn_heads)
 
         self.max_seq_len = max_seq_len
         self.token_emb = nn.Embedding(num_tokens, dim)
 
-        if fixed_position_emb:
+        if rotary_position_emb:
             self.pos_emb = FixedPositionalEmbedding(dim, max_seq_len)
+            self.layer_pos_emb = FixedPositionalEmbedding(dim_head, max_seq_len)
         elif axial_position_emb:
             axial_position_shape = default(axial_position_shape, (math.ceil(max_seq_len / 64), 64))
             self.pos_emb = AxialPositionalEmbedding(dim, axial_position_shape)
+            self.layer_pos_emb = always(None)
         else:
             self.pos_emb = AbsolutePositionalEmbedding(dim, max_seq_len)
+            self.layer_pos_emb = always(None)
 
         self.dropout = nn.Dropout(emb_dropout)
 
-        self.performer = Performer(dim, depth, heads, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, qr_uniform_q, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, no_projection, auto_check_redraw)
+        self.performer = Performer(dim, depth, heads, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, no_projection, auto_check_redraw)
         self.norm = nn.LayerNorm(dim)
         self.to_out = nn.Linear(dim, num_tokens) if not tie_embed else None
 
@@ -477,10 +507,13 @@ class PerformerLM(nn.Module):
         # token and positional embeddings
         x = self.token_emb(x)
         x += self.pos_emb(x)
+
         x = self.dropout(x)
 
         # performer layers
-        x = self.performer(x, **kwargs)
+
+        layer_pos_emb = self.layer_pos_emb(x)
+        x = self.performer(x, pos_emb = layer_pos_emb, **kwargs)
 
         # norm and to logits
         x = self.norm(x)
