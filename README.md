@@ -41,7 +41,8 @@ model = PerformerLM(
     ff_dropout = 0.1,               # feedforward dropout
     attn_dropout = 0.1,             # post-attn dropout
     local_attn_heads = 4,           # 4 heads are local attention, 4 others are global performers
-    local_window_size = 256         # window size of local attention
+    local_window_size = 256,        # window size of local attention
+    rotary_position_emb = True      # use rotary positional embedding, which endows linear attention with relative positional encoding with no learned parameters. should always be turned on unless if you want to go back to old absolute positional encoding
 )
 
 x = torch.randint(0, 20000, (1, 2048))
