@@ -301,7 +301,22 @@ class FeedForward(nn.Module):
         return x
 
 class SelfAttention(nn.Module):
-    def __init__(self, dim, causal = False, heads = 8, dim_head = 64, local_heads = 0, local_window_size = 256, nb_features = None, feature_redraw_interval = 1000, generalized_attention = False, kernel_fn = nn.ReLU(), dropout = 0., no_projection = False):
+    def __init__(
+        self,
+        dim,
+        causal = False,
+        heads = 8,
+        dim_head = 64,
+        local_heads = 0,
+        local_window_size = 256,
+        nb_features = None,
+        feature_redraw_interval = 1000,
+        generalized_attention = False,
+        kernel_fn = nn.ReLU(),
+        dropout = 0.,
+        no_projection = False,
+        qkv_bias = False
+    ):
         super().__init__()
         assert dim % heads == 0, 'dimension must be divisible by number of heads'
         dim_head = default(dim_head, dim // heads)
@@ -312,9 +327,9 @@ class SelfAttention(nn.Module):
         self.global_heads = heads - local_heads
         self.local_attn = LocalAttention(window_size = local_window_size, causal = causal, autopad = True, dropout = dropout, look_forward = int(not causal), rel_pos_emb_config = (dim_head, local_heads)) if local_heads > 0 else None
 
-        self.to_q = nn.Linear(dim, inner_dim)
-        self.to_k = nn.Linear(dim, inner_dim)
-        self.to_v = nn.Linear(dim, inner_dim)
+        self.to_q = nn.Linear(dim, inner_dim, bias = qkv_bias)
+        self.to_k = nn.Linear(dim, inner_dim, bias = qkv_bias)
+        self.to_v = nn.Linear(dim, inner_dim, bias = qkv_bias)
         self.to_out = nn.Linear(inner_dim, dim)
         self.dropout = nn.Dropout(dropout)
 
@@ -397,7 +412,32 @@ class FixedPositionalEmbedding(nn.Module):
 # performer
 
 class Performer(nn.Module):
-    def __init__(self, dim, depth, heads, dim_head, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, generalized_attention = False, kernel_fn = nn.ReLU(), use_scalenorm = False, use_rezero = False, ff_glu = False, ff_dropout = 0., attn_dropout = 0., cross_attend = False, no_projection = False, auto_check_redraw = True):
+    def __init__(
+        self,
+        dim,
+        depth,
+        heads,
+        dim_head,
+        local_attn_heads = 0,
+        local_window_size = 256,
+        causal = False,
+        ff_mult = 4,
+        nb_features = None,
+        feature_redraw_interval = 1000,
+        reversible = False,
+        ff_chunks = 1,
+        generalized_attention = False,
+        kernel_fn = nn.ReLU(),
+        use_scalenorm = False,
+        use_rezero = False,
+        ff_glu = False,
+        ff_dropout = 0.,
+        attn_dropout = 0.,
+        cross_attend = False,
+        no_projection = False,
+        auto_check_redraw = True,
+        qkv_bias = True
+    ):
         super().__init__()
         layers = nn.ModuleList([])
         local_attn_heads = cast_tuple(local_attn_heads)
@@ -414,7 +454,7 @@ class Performer(nn.Module):
 
         for _, local_heads in zip(range(depth), local_attn_heads):
             layers.append(nn.ModuleList([
-                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, dim_head = dim_head, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, dropout = attn_dropout, no_projection = no_projection)),
+                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, dim_head = dim_head, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, dropout = attn_dropout, no_projection = no_projection, qkv_bias = qkv_bias)),
                 wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
             ]))
 
@@ -464,7 +504,40 @@ class Performer(nn.Module):
         return self.net(x, **kwargs)
 
 class PerformerLM(nn.Module):
-    def __init__(self, *, num_tokens, max_seq_len, dim, depth, heads, dim_head = 64, local_attn_heads = 0, local_window_size = 256, causal = False, ff_mult = 4, nb_features = None, feature_redraw_interval = 1000, reversible = False, ff_chunks = 1, ff_glu = False, emb_dropout = 0., ff_dropout = 0., attn_dropout = 0., generalized_attention = False, kernel_fn = nn.ReLU(), use_scalenorm = False, use_rezero = False, cross_attend = False, no_projection = False, tie_embed = False, rotary_position_emb = True, axial_position_emb = False, axial_position_shape = None, auto_check_redraw = True):
+    def __init__(
+        self,
+        *,
+        num_tokens,
+        max_seq_len,
+        dim,
+        depth,
+        heads,
+        dim_head = 64,
+        local_attn_heads = 0,
+        local_window_size = 256,
+        causal = False,
+        ff_mult = 4,
+        nb_features = None,
+        feature_redraw_interval = 1000,
+        reversible = False,
+        ff_chunks = 1,
+        ff_glu = False,
+        emb_dropout = 0.,
+        ff_dropout = 0.,
+        attn_dropout = 0.,
+        generalized_attention = False,
+        kernel_fn = nn.ReLU(),
+        use_scalenorm = False,
+        use_rezero = False,
+        cross_attend = False,
+        no_projection = False,
+        tie_embed = False,
+        rotary_position_emb = True,
+        axial_position_emb = False,
+        axial_position_shape = None,
+        auto_check_redraw = True,
+        qkv_bias = False
+    ):
         super().__init__()
         local_attn_heads = cast_tuple(local_attn_heads)
 
@@ -484,7 +557,7 @@ class PerformerLM(nn.Module):
 
         self.dropout = nn.Dropout(emb_dropout)
 
-        self.performer = Performer(dim, depth, heads, dim_head, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, no_projection, auto_check_redraw)
+        self.performer = Performer(dim, depth, heads, dim_head, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, no_projection, auto_check_redraw, qkv_bias)
         self.norm = nn.LayerNorm(dim)
         self.to_out = nn.Linear(dim, num_tokens) if not tie_embed else None
 
