@@ -550,7 +550,7 @@ class PerformerLM(nn.Module):
         self.token_emb = nn.Embedding(num_tokens, dim)
 
         if rotary_position_emb:
-            self.pos_emb = Always(0)
+            self.pos_emb = FixedPositionalEmbedding(dim, max_seq_len)
             self.layer_pos_emb = FixedPositionalEmbedding(dim_head, max_seq_len)
         elif axial_position_emb:
             axial_position_shape = default(axial_position_shape, (math.ceil(max_seq_len / 64), 64))
