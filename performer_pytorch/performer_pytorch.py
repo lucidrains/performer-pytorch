@@ -26,9 +26,6 @@ def exists(val):
 def empty(tensor):
     return tensor.numel() == 0
 
-def always(val):
-    return lambda *args: val
-
 def default(val, d):
     return val if exists(val) else d
 
@@ -44,6 +41,14 @@ def get_module_device(module):
 
 def find_modules(nn_module, type):
     return [module for module in nn_module.modules() if isinstance(module, type)]
+
+class Always(nn.Module):
+    def __init__(self, val):
+        super().__init__()
+        self.val = val
+
+    def forward(self, *args, **kwargs):
+        return self.val
 
 # kernel functions
 
@@ -545,15 +550,15 @@ class PerformerLM(nn.Module):
         self.token_emb = nn.Embedding(num_tokens, dim)
 
         if rotary_position_emb:
-            self.pos_emb = FixedPositionalEmbedding(dim, max_seq_len)
+            self.pos_emb = Always(0)
             self.layer_pos_emb = FixedPositionalEmbedding(dim_head, max_seq_len)
         elif axial_position_emb:
             axial_position_shape = default(axial_position_shape, (math.ceil(max_seq_len / 64), 64))
             self.pos_emb = AxialPositionalEmbedding(dim, axial_position_shape)
-            self.layer_pos_emb = always(None)
+            self.layer_pos_emb = Always(None)
         else:
             self.pos_emb = AbsolutePositionalEmbedding(dim, max_seq_len)
-            self.layer_pos_emb = always(None)
+            self.layer_pos_emb = Always(None)
 
         self.dropout = nn.Dropout(emb_dropout)
 
