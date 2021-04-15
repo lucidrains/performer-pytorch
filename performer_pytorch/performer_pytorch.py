@@ -141,7 +141,7 @@ def linear_attention(q, k, v):
 
 # efficient causal linear attention, created by EPFL
 # TODO: rewrite EPFL's CUDA kernel to do mixed precision and remove half to float conversion and back
-def causal_linear_attention(q, k, v):
+def causal_linear_attention(q, k, v, eps = 1e-6):
     from fast_transformers.causal_product import CausalDotProduct
     autocast_enabled = torch.is_autocast_enabled()
     is_half = isinstance(q, torch.cuda.HalfTensor)
@@ -150,7 +150,7 @@ def causal_linear_attention(q, k, v):
 
     causal_dot_product_fn = amp.float_function(CausalDotProduct.apply) if is_half else CausalDotProduct.apply
 
-    k_cumsum = k.cumsum(dim=-2)
+    k_cumsum = k.cumsum(dim=-2) + eps
     D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q))
 
     with cuda_context():
