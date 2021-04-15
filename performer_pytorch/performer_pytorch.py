@@ -351,15 +351,15 @@ class SelfAttention(nn.Module):
         q, k, v = map(lambda t: rearrange(t, 'b n (h d) -> b h n d', h = h), (q, k, v))
         (q, lq), (k, lk), (v, lv) = map(lambda t: (t[:, :gh], t[:, gh:]), (q, k, v))
 
-        if exists(pos_emb) and not cross_attend:
-            q, k, = apply_rotory_pos_emb(q, k, pos_emb)
-
         attn_outs = []
 
         if not empty(q):
             if exists(context_mask):
                 global_mask = context_mask[:, None, :, None]
                 v.masked_fill_(~global_mask, 0.)
+
+            if exists(pos_emb) and not cross_attend:
+                q, k, = apply_rotary_pos_emb(q, k, pos_emb)
 
             out = self.fast_attention(q, k, v)
             attn_outs.append(out)
@@ -393,7 +393,7 @@ def rotate_every_two(x):
     x = torch.stack((-x2, x1), dim = -1)
     return rearrange(x, '... d j -> ... (d j)')
 
-def apply_rotory_pos_emb(q, k, sinu_pos):
+def apply_rotary_pos_emb(q, k, sinu_pos):
     sinu_pos = rearrange(sinu_pos, '() n (j d) -> n j d', j = 2)
     sin, cos = sinu_pos.unbind(dim = -2)
     sin, cos = map(lambda t: repeat(t, 'b n -> b (n j)', j = 2), (sin, cos))
