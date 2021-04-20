@@ -164,7 +164,7 @@ def causal_linear_attention(q, k, v, eps = 1e-6):
 
 # inefficient causal linear attention, without cuda code, for reader's reference
 # not being used
-def causal_linear_attention_noncuda(q, k, v, chunk_size = 128):
+def causal_linear_attention_noncuda(q, k, v, chunk_size = 128, eps = 1e-6):
     last_k_cumsum = 0
     last_context_cumsum = 0
     outs = []
@@ -172,7 +172,7 @@ def causal_linear_attention_noncuda(q, k, v, chunk_size = 128):
     for q, k, v in zip(*map(lambda t: t.chunk(chunk_size, dim = -2), (q, k, v))):
         k_cumsum = last_k_cumsum + k.cumsum(dim=-2)
 
-        D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q))
+        D_inv = 1. / torch.einsum('...nd,...nd->...n', q, k_cumsum.type_as(q) + eps)
         context = torch.einsum('...nd,...ne->...nde', k, v)
         context_cumsum = last_context_cumsum + context.cumsum(dim=-3)
         out = torch.einsum('...nde,...nd,...n->...ne', context_cumsum, q, D_inv)
@@ -305,7 +305,7 @@ class FeedForward(nn.Module):
         x = self.w2(x)
         return x
 
-class SelfAttention(nn.Module):
+class Attention(nn.Module):
     def __init__(
         self,
         dim,
@@ -374,6 +374,16 @@ class SelfAttention(nn.Module):
         out = rearrange(out, 'b h n d -> b n (h d)')
         out =  self.to_out(out)
         return self.dropout(out)
+
+class SelfAttention(Attention):
+    def forward(self, *args, context = None, **kwargs):
+        assert not exists(context), 'self attention should not receive context'
+        return super().forward(*args, **kwargs)
+
+class CrossAttention(Attention):
+    def forward(self, *args, context = None, **kwargs):
+        assert exists(context), 'cross attention should receive context'
+        return super().forward(*args, context = context, **kwargs)
 
 # positional embeddings
 
@@ -469,7 +479,7 @@ class Performer(nn.Module):
                 continue
 
             layers.append(nn.ModuleList([
-                wrapper_fn(SelfAttention(dim, heads = heads, dim_head = dim_head, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, dropout = attn_dropout, no_projection = no_projection, qkv_bias = qkv_bias, attn_out_bias = attn_out_bias)),
+                wrapper_fn(CrossAttention(dim, heads = heads, dim_head = dim_head, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, dropout = attn_dropout, no_projection = no_projection, qkv_bias = qkv_bias, attn_out_bias = attn_out_bias)),
                 wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
             ]))
 
