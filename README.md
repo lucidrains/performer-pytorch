@@ -125,6 +125,23 @@ x = torch.randn(1, 1024, 512).cuda()
 attn(x) # (1, 1024, 512)
 ```
 
+Cross attention is similarly
+
+```python
+import torch
+from performer_pytorch import CrossAttention
+
+attn = CrossAttention(
+    dim = 512,
+    heads = 8
+).cuda()
+
+x = torch.randn(1, 1024, 512).cuda()
+context = torch.randn(1, 512, 512).cuda()
+
+attn(x, context = context) # (1, 1024, 512)
+```
+
 To minimize model surgery, you could also simply rewrite the code, so that the attention step is done by the `FastAttention` module, as follows.
 
 ```python
