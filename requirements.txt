@@ -1,0 +1,1 @@
+pytorch-fast-transformers>=0.3.0

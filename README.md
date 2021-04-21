@@ -12,6 +12,12 @@ An implementation of <a href="https://arxiv.org/abs/2009.14794">Performer</a>, a
 $ pip install performer-pytorch
 ```
 
+Then you must run the following, if you plan on training an autoregressive model
+
+```bash
+$ pip install -r requirements.txt
+```
+
 ## Usage
 
 Performer Language Model
