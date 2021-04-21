@@ -247,6 +247,9 @@ class ProjectionUpdater(nn.Module):
         self.feature_redraw_interval = feature_redraw_interval
         self.register_buffer('calls_since_last_redraw', torch.tensor(0))
 
+    def fix_projections_(self):
+        self.feature_redraw_interval = None
+
     def redraw_projections(self):
         model = self.instance
 
