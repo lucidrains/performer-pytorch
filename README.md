@@ -244,10 +244,13 @@ Now your model will have fixed projection matrices across all layers
 ```
 
 ```bibtex
-@techreport{zhuiyiroformer,
-    title   = {RoFormer: Transformer with Rotary Position Embeddings - ZhuiyiAI},
-    author  = {Jianlin Su},
+@misc{su2021roformer,
+    title   = {RoFormer: Enhanced Transformer with Rotary Position Embedding},
+    author  = {Jianlin Su and Yu Lu and Shengfeng Pan and Bo Wen and Yunfeng Liu},
     year    = {2021},
-    url     = "https://github.com/ZhuiyiTechnology/roformer",
+    eprint  = {2104.09864},
+    archivePrefix = {arXiv},
+    primaryClass = {cs.CL},
+    url     = {https://arxiv.org/abs/2104.09864}
 }
 ```
