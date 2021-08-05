@@ -42,7 +42,6 @@ class PerformerEncDec(nn.Module):
         self,
         dim,
         ignore_index = 0,
-        pad_value = 0,
         tie_token_embeds = False,
         no_projection = False,
         **kwargs
@@ -65,7 +64,7 @@ class PerformerEncDec(nn.Module):
             enc.token_emb = dec.token_emb
 
         self.enc = enc
-        self.dec = AutoregressiveWrapper(dec, ignore_index = ignore_index, pad_value = pad_value)
+        self.dec = AutoregressiveWrapper(dec, ignore_index = ignore_index)
 
     @torch.no_grad()
     def generate(self, seq_in, seq_out_start, seq_len, **kwargs):
