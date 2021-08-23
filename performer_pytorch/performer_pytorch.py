@@ -50,6 +50,34 @@ class Always(nn.Module):
     def forward(self, *args, **kwargs):
         return self.val
 
+# token shifting helper and classes
+
+def shift(t, amount, mask = None):
+    if amount == 0:
+        return t
+
+    if exists(mask):
+        t = t.masked_fill(~mask[..., None], 0.)
+
+    return F.pad(t, (0, 0, amount, -amount), value = 0.)
+
+class PreShiftTokens(nn.Module):
+    def __init__(self, shifts, fn):
+        super().__init__()
+        self.fn = fn
+        self.shifts = tuple(shifts)
+
+    def forward(self, x, **kwargs):
+        mask = kwargs.get('mask', None)
+        shifts = self.shifts
+        segments = len(shifts)
+        feats_per_shift = x.shape[-1] // segments
+        splitted = x.split(feats_per_shift, dim = -1)
+        segments_to_shift, rest = splitted[:segments], splitted[segments:]
+        segments_to_shift = list(map(lambda args: shift(*args, mask = mask), zip(segments_to_shift, shifts)))
+        x = torch.cat((*segments_to_shift, *rest), dim = -1)
+        return self.fn(x, **kwargs)
+
 # kernel functions
 
 # transcribed from jax to pytorch from
@@ -486,7 +514,8 @@ class Performer(nn.Module):
         no_projection = False,
         auto_check_redraw = True,
         qkv_bias = True,
-        attn_out_bias = True
+        attn_out_bias = True,
+        shift_tokens = False
     ):
         super().__init__()
         layers = nn.ModuleList([])
@@ -503,10 +532,16 @@ class Performer(nn.Module):
             wrapper_fn = partial(PreLayerNorm, dim)
 
         for _, local_heads in zip(range(depth), local_attn_heads):
-            layers.append(nn.ModuleList([
-                wrapper_fn(SelfAttention(dim, causal = causal, heads = heads, dim_head = dim_head, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, dropout = attn_dropout, no_projection = no_projection, qkv_bias = qkv_bias, attn_out_bias = attn_out_bias)),
-                wrapper_fn(Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1))
-            ]))
+
+            attn = SelfAttention(dim, causal = causal, heads = heads, dim_head = dim_head, local_heads = local_heads, local_window_size = local_window_size, nb_features = nb_features, generalized_attention = generalized_attention, kernel_fn = kernel_fn, dropout = attn_dropout, no_projection = no_projection, qkv_bias = qkv_bias, attn_out_bias = attn_out_bias)
+            ff = Chunk(ff_chunks, FeedForward(dim, mult = ff_mult, dropout = ff_dropout, glu = ff_glu), along_dim = 1)
+
+            if shift_tokens:
+                shift = (0, 1) if causal else (-1, 0, 1)
+                attn, ff = map(lambda t: PreShiftTokens(shift, t), (attn, ff))
+
+            attn, ff = map(wrapper_fn, (attn, ff))
+            layers.append(nn.ModuleList([attn, ff]))
 
             if not cross_attend:
                 continue
@@ -570,7 +605,8 @@ class PerformerLM(nn.Module):
         axial_position_shape = None,
         auto_check_redraw = True,
         qkv_bias = False,
-        attn_out_bias = False
+        attn_out_bias = False,
+        shift_tokens = False
     ):
         super().__init__()
         local_attn_heads = cast_tuple(local_attn_heads)
@@ -591,7 +627,7 @@ class PerformerLM(nn.Module):
 
         self.dropout = nn.Dropout(emb_dropout)
 
-        self.performer = Performer(dim, depth, heads, dim_head, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, no_projection, auto_check_redraw, qkv_bias, attn_out_bias)
+        self.performer = Performer(dim, depth, heads, dim_head, local_attn_heads, local_window_size, causal, ff_mult, nb_features, feature_redraw_interval, reversible, ff_chunks, generalized_attention, kernel_fn, use_scalenorm, use_rezero, ff_glu, ff_dropout, attn_dropout, cross_attend, no_projection, auto_check_redraw, qkv_bias, attn_out_bias, shift_tokens)
         self.norm = nn.LayerNorm(dim)
         self.to_out = nn.Linear(dim, num_tokens) if not tie_embed else None
 
