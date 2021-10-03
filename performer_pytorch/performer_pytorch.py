@@ -12,6 +12,10 @@ from local_attention import LocalAttention
 from axial_positional_embedding import AxialPositionalEmbedding
 from performer_pytorch.reversible import ReversibleSequence, SequentialSequence
 
+from distutils.version import LooseVersion
+
+TORCH_GE_1_8_0 = LooseVersion(torch.__version__) >= LooseVersion('1.8.0')
+
 try:
     from apex import amp
     APEX_AVAILABLE = True
@@ -128,7 +132,10 @@ def generalized_kernel(data, *, projection_matrix, kernel_fn = nn.ReLU(), kernel
 
 def orthogonal_matrix_chunk(cols, device = None):
     unstructured_block = torch.randn((cols, cols), device = device)
-    q, r = torch.qr(unstructured_block.cpu(), some = True)
+    if TORCH_GE_1_8_0:
+        q, r = torch.linalg.qr(unstructured_block.cpu(), mode = 'reduced')
+    else:
+        q, r = torch.qr(unstructured_block.cpu(), some = True)
     q, r = map(lambda t: t.to(device), (q, r))
     return q.t()
 
