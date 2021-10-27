@@ -25,6 +25,12 @@ def top_k(logits, thres = 0.9):
     probs.scatter_(1, ind, val)
     return probs
 
+def repetition_penalty_fn(logits, ctx, theta=1.2):
+    w = torch.ones(logits.shape[-1], dtype=torch.float, device=logits.device)
+    for i in torch.unique(ctx):
+        w[i] = theta
+    return logits/w
+
 class AutoregressiveWrapper(nn.Module):
     def __init__(self, net, ignore_index = 0, pad_value = 0):
         super().__init__()
@@ -35,7 +41,7 @@ class AutoregressiveWrapper(nn.Module):
         self.max_seq_len = net.max_seq_len
 
     @torch.no_grad()
-    def generate(self, start_tokens, seq_len, eos_token = None, temperature = 1., filter_logits_fn = top_k, filter_thres = 0.9, **kwargs):
+    def generate(self, start_tokens, seq_len, eos_token = None, temperature = 1., filter_logits_fn = top_k, filter_thres = 0.9, repetition_penalty=1.0, repetition_penalty_ctx=32 **kwargs):
         was_training = self.net.training
         num_dims = len(start_tokens.shape)
 
@@ -64,6 +70,8 @@ class AutoregressiveWrapper(nn.Module):
             x = out[:, -self.max_seq_len:]
             input_mask = input_mask[:, -self.max_seq_len:]
             logits = self.net(x, mask=input_mask, **kwargs)[:, -1, :]
+            if repetition_penalty > 1.0:
+                logits = repetition_penalty_fn(logits, out[-repetition_penalty_ctx:], theta=repetition_penalty)
             filtered_logits = filter_logits_fn(logits, thres = filter_thres)
             probs = F.softmax(filtered_logits / temperature, dim=-1)
             sample = torch.multinomial(probs, 1)
