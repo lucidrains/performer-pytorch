@@ -107,10 +107,10 @@ def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, ep
     if is_query:
         data_dash = ratio * (
             torch.exp(data_dash - diag_data -
-                    torch.amax(data_dash, dim=-1, keepdim=True)) + eps)
+                    torch.amax(data_dash, dim=-1, keepdim=True).detach()) + eps)
     else:
         data_dash = ratio * (
-            torch.exp(data_dash - diag_data - torch.amax(data_dash, dim=(-1, -2), keepdim=True)) + eps)
+            torch.exp(data_dash - diag_data - torch.amax(data_dash, dim=(-1, -2), keepdim=True).detach()) + eps)
 
     return data_dash.type_as(data)
 
