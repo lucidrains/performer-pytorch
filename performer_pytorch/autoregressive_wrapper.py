@@ -32,9 +32,8 @@ def repetition_penalty_fn(logits, ctx, theta=1.2):
     return logits/w
 
 class AutoregressiveWrapper(nn.Module):
-    def __init__(self, net, ignore_index = 0, pad_value = 0):
+    def __init__(self, net, ignore_index = 0):
         super().__init__()
-        self.pad_value = pad_value
         self.ignore_index = ignore_index
 
         self.net = net

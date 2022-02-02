@@ -94,7 +94,7 @@ enc_dec = PerformerEncDec(
     dec_num_tokens = 20000,
     dec_depth = 6,
     dec_heads = 8,
-    dec_max_seq_len = TGT_SEQ_LEN,
+    dec_max_seq_len = TGT_SEQ_LEN
 )
 
 src = torch.randint(0, 20000, (1, SRC_SEQ_LEN))
@@ -124,7 +124,7 @@ from performer_pytorch import SelfAttention
 attn = SelfAttention(
     dim = 512,
     heads = 8,
-    causal = False,
+    causal = False
 ).cuda()
 
 x = torch.randn(1, 1024, 512).cuda()
