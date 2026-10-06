@@ -250,7 +250,8 @@ class FastAttention(nn.Module):
     @torch.no_grad()
     def redraw_projection_matrix(self, device):
         projections = self.create_projection(device = device)
-        self.projection_matrix.copy_(projections)
+        # Earlier forward graphs may still need the previous projection for backward.
+        self.projection_matrix = projections.type_as(self.projection_matrix)
         del projections
 
     def forward(self, q, k, v):
