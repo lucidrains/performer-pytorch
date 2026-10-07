@@ -87,7 +87,7 @@ class PreShiftTokens(nn.Module):
 # transcribed from jax to pytorch from
 # https://github.com/google-research/google-research/blob/master/performer/fast_attention/jax/fast_attention.py
 
-def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, eps=1e-4, device = None):
+def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, eps=1e-4, device = None, key_mask = None):
     b, h, *_ = data.shape
 
     data_normalizer = (data.shape[-1] ** -0.25) if normalize_data else 1.
@@ -109,8 +109,17 @@ def softmax_kernel(data, *, projection_matrix, is_query, normalize_data=True, ep
             torch.exp(data_dash - diag_data -
                     torch.amax(data_dash, dim=-1, keepdim=True).detach()) + eps)
     else:
-        data_dash = ratio * (
-            torch.exp(data_dash - diag_data - torch.amax(data_dash, dim=(-1, -2), keepdim=True).detach()) + eps)
+        key_max = data_dash
+        if exists(key_mask):
+            key_max = key_max.masked_fill(~key_mask, float('-inf'))
+        key_max = torch.amax(key_max, dim=(-1, -2), keepdim=True).detach()
+        if exists(key_mask):
+            key_max = key_max.masked_fill(~key_mask.any(dim=-2, keepdim=True), 0.)
+        key_logits = data_dash - diag_data - key_max
+        if exists(key_mask):
+            # Inactive keys must not overflow before their features are masked.
+            key_logits = key_logits.masked_fill(~key_mask, float('-inf'))
+        data_dash = ratio * (torch.exp(key_logits) + eps)
 
     return data_dash.type_as(data)
 
@@ -169,7 +178,8 @@ def gaussian_orthogonal_random_matrix(nb_rows, nb_columns, scaling = 0, device =
 # non-causal linear attention
 def linear_attention(q, k, v):
     k_cumsum = k.sum(dim = -2)
-    D_inv = 1. / torch.einsum('...nd,...d->...n', q, k_cumsum.type_as(q))
+    denominator = torch.einsum('...nd,...d->...n', q, k_cumsum.type_as(q))
+    D_inv = 1. / denominator.masked_fill(denominator == 0., 1.)
     context = torch.einsum('...nd,...ne->...de', k, v)
     out = torch.einsum('...de,...nd,...n->...ne', context, q, D_inv)
     return out
@@ -253,11 +263,15 @@ class FastAttention(nn.Module):
         self.projection_matrix.copy_(projections)
         del projections
 
-    def forward(self, q, k, v):
+    def forward(self, q, k, v, mask = None):
         device = q.device
+        key_mask = mask[:, None, :, None] if exists(mask) else None
 
         if self.no_projection:
             q = q.softmax(dim = -1)
+            if exists(key_mask):
+                k = k.masked_fill(~key_mask, float('-inf'))
+                k = k.masked_fill(~key_mask.any(dim=-2, keepdim=True), 0.)
             k = torch.exp(k) if self.causal else k.softmax(dim = -2)
 
         elif self.generalized_attention:
@@ -267,7 +281,10 @@ class FastAttention(nn.Module):
         else:
             create_kernel = partial(softmax_kernel, projection_matrix = self.projection_matrix, device = device)
             q = create_kernel(q, is_query = True)
-            k = create_kernel(k, is_query = False)
+            k = create_kernel(k, is_query = False, key_mask = key_mask)
+
+        if exists(key_mask):
+            k = k.masked_fill(~key_mask, 0.)
 
         attn_fn = linear_attention if not self.causal else self.causal_linear_fn
         out = attn_fn(q, k, v)
@@ -430,7 +447,7 @@ class Attention(nn.Module):
             if exists(pos_emb) and not cross_attend:
                 q, k = apply_rotary_pos_emb(q, k, pos_emb)
 
-            out = self.fast_attention(q, k, v)
+            out = self.fast_attention(q, k, v, mask = context_mask)
             attn_outs.append(out)
 
         if not empty(lq):
